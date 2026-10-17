@@ -1458,7 +1458,7 @@ function Components:AddTextbox(options: TextboxOptions)
         Numeric = options.Numeric == true,
         Finished = options.Finished == true,
         AllowEmpty = options.AllowEmpty ~= false,
-        EmptyReset = options.EmptyReset or "---",
+        EmptyReset = options.EmptyReset or "",
         MaxLength = options.MaxLength,
         VerifyValue = options.VerifyValue,
         ClearTextOnBlur = options.ClearTextOnBlur == true,
