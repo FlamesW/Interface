@@ -3384,6 +3384,22 @@ function Library:CreateWindow(options: WindowOptions)
             Elements.Size = UDim2.new(1, 0, 0, math.clamp(ElementsListLayout.AbsoluteContentSize.Y, 0, workspace.CurrentCamera.ViewportSize.Y / 1.6))
         end)
 
+        TabButton.MouseEnter:Connect(function()
+            Tab.Hovering = true
+            if not Tab.Opened then
+                Tween(TabButton, FastTween, {BackgroundColor3 = Color3.fromRGB(30, 30, 30)})
+                Tween(TabButtonText, FastTween, {TextTransparency = 0.25})
+            end
+        end)
+
+        TabButton.MouseLeave:Connect(function()
+            Tab.Hovering = false
+            if not Tab.Opened then
+                Tween(TabButton, FastTween, {BackgroundColor3 = Color3.fromRGB(25, 25, 25)})
+                Tween(TabButtonText, FastTween, {TextTransparency = 0.5})
+            end
+        end)
+
         TabButton.MouseButton1Click:Connect(function() task.spawn(Tab.Toggle) end)
         if Collapsed ~= false then Tab:Toggle() end
 
