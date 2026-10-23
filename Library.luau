@@ -3968,7 +3968,7 @@ function Library:Unload()
         getgenv().Multi_Support = nil
     end
 
-    if getgenv().Auto_Show then
+    if getgenv().Auto_Show ~= nil then
         getgenv().Auto_Show = nil
     end
 
