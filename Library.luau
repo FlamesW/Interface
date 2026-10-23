@@ -3547,7 +3547,7 @@ function Library:CreateWindow(options: WindowOptions)
         })
 
         UISection:AddButton({
-            Name = "Unload",
+            Name = "Unload", DoubleClick = true,
             Callback = function() Library:Unload() end,
         })
 
