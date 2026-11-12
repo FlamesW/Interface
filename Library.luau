@@ -4514,7 +4514,7 @@ function Library:CreateWindow(options: WindowOptions)
         local savedKeybind = LoadKeybind()
         local initialKeybind = savedKeybind == nil and Library.ToggleKeybind or savedKeybind
         Library.ToggleKeybind = UISection:AddKeyPicker({
-            Name = "Keybind", Flag = "Toggle_Keybind",
+            Name = "Keybind",
             Keybind = initialKeybind
         })
 
