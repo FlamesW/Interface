@@ -4137,7 +4137,7 @@ function Library:CreateWindow(options: WindowOptions)
     SetSnow(Library.SnowEnabled)
     Library.SaveFolder = options.SaveFolder or "Library"
     Library.ToggleKeybind = options.ToggleKeybind or Enum.KeyCode.RightShift
-    local defaultTheme = ResolveThemeName(options.Theme) or "Aurora"
+    local defaultTheme = ResolveThemeName(options.Theme) or "Default"
     local storedTheme = LoadTheme()
     Library.InitialTheme = storedTheme or defaultTheme
     Library:SetTheme(Library.InitialTheme)
@@ -4991,7 +4991,7 @@ function Library:CreateWindow(options: WindowOptions)
                 else savedPaletteKey = GetKeybindFromString(data.Keybind) end
             end
         end
-        local initialPaletteKey = savedPaletteKey == nil and Enum.KeyCode.F4 or savedPaletteKey
+        local initialPaletteKey = savedPaletteKey == nil and Enum.KeyCode.Semicolon or savedPaletteKey
         local paletteKeyPicker = UISection:AddKeyPicker({Name = "Palette Keybind", Keybind = initialPaletteKey})
         Library.CommandPaletteKeybind = paletteKeyPicker
         do
@@ -6244,7 +6244,7 @@ do
             end
         elseif not processed and not UserInputService:GetFocusedTextBox() and not Library.ActiveKeyPicker then
             local picker = Library.CommandPaletteKeybind
-            local key = type(picker) == "table" and picker.Keybind or (picker or Enum.KeyCode.F4)
+            local key = type(picker) == "table" and picker.Keybind or (picker or Enum.KeyCode.Semicolon)
             if type(picker) == "table" and picker.Keybind == nil then key = nil end
             local uiPicker = Library.ToggleKeybind
             local picking = (type(picker) == "table" and picker.Picking)
