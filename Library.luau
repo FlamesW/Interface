@@ -628,7 +628,7 @@ ElementSerializers.KeyPicker = {
             kb = GetKeybindFromString(data.keybind)
         end
         el:SetKeybind(kb)
-        if data.mode then el.Mode = data.mode end
+        if data.mode and el.SetMode then el:SetMode(data.mode) elseif data.mode then el.Mode = data.mode end
         if data.mode == "Toggle" and data.state ~= nil and el.SetState then
             el:SetState(data.state and true or false)
         end
@@ -663,7 +663,7 @@ function Library:RefreshConfigList()
     local names = {}
     for _, full in ipairs(files) do
         local fname = full:match("([^/\\]+)%.json$")
-        if fname and fname ~= "autoload" then
+        if fname and fname ~= "autoload" and fname ~= "Favorites" and fname ~= "CommandFavorites" then
             table.insert(names, fname)
         end
     end
@@ -840,6 +840,7 @@ end
 
 -- Palette feature registry: controls remain the source of truth.
 Library._PaletteFeatures = {}
+Library._PaletteLocks = {}
 local function PaletteValueText(value)
     if typeof(value) == "Color3" then return "#" .. value:ToHex():upper() end
     if typeof(value) == "EnumItem" then return value.Name end
@@ -900,9 +901,16 @@ local function PublishPaletteFeature(entry)
     local arguments = entry.Kind == "Button" and {} or {"value"}
     Library:AddCommand({Name = commandName, Category = entry.Category, Kind = "Feature", FeatureKind = entry.Kind, FeatureEntry = entry, Icon = entry.Icon, Tag = entry.Tag, Arguments = arguments,
         OptionalArguments = true, Description = entry.Description or "", ValueText = function()
-            return entry.GetValue and PaletteValueText(entry.GetValue()) or ""
+            if not entry.GetValue then return "" end
+            local value = entry.GetValue()
+            if type(entry.DisplayFormat) == "function" then local ok, formatted = pcall(entry.DisplayFormat, value, entry.Control); if ok and formatted ~= nil then return tostring(formatted) end
+            elseif type(entry.DisplayFormat) == "string" then local ok, formatted = pcall(string.format, entry.DisplayFormat, type(value) == "table" and PaletteValueText(value) or value); if ok then return formatted end end
+            return PaletteValueText(value)
         end,
         Callback = function(args)
+            for category, locked in pairs(Library._PaletteLocks) do
+                if locked and (entry.Category == category or entry.Category:sub(1, #category + 3) == category .. " / ") then return end
+            end
             if entry.Control and entry.Control.Locked then return end
             if entry.Kind == "Button" then if entry.Activate then entry.Activate() end; return end
             local raw = table.concat(args or {}, " ")
@@ -947,7 +955,7 @@ function Library:RegisterPaletteFeature(info)
     assert(type(info) == "table" and type(info.Name) == "string" and info.Name:match("%S"), "A feature needs a name")
     local entry = {Name = info.Name, Category = tostring(info.Category or info.Section or "Custom"), Kind = info.Kind or info.Type or "Custom",
         Control = info.Control, GetValue = info.GetValue or info.Get, SetValue = info.SetValue or info.Set,
-        Description = info.Description, Activate = info.Activate, Icon = info.Icon, Tag = info.Tag or info.Label, Auto = info.Auto == true}
+        Description = info.Description, Activate = info.Activate, Icon = info.Icon, Tag = info.Tag or info.Label, DisplayFormat = info.DisplayFormat, Auto = info.Auto == true}
     table.insert(self._PaletteFeatures, entry)
     PublishPaletteFeature(entry)
     function entry:Refresh() RefreshPaletteValue() end
@@ -976,7 +984,7 @@ local function RegisterControlForPalette(container, info, control, kind)
     if type(info.Name) ~= "string" or info.Name == "" then return end
     local category = container._PaletteCategory or "Features"
     local setter = kind == "Dropdown" and "SetValue" or kind == "Keybind" and "SetKeybind" or kind == "Color" and "SetColor" or "Set"
-    local entry = Library:RegisterPaletteFeature({Name = info.Name, Category = category, Kind = kind, Control = control, Auto = true,
+    local entry = Library:RegisterPaletteFeature({Name = info.Name, Category = category, Kind = kind, Control = control, DisplayFormat = info.DisplayFormat, Auto = true,
         GetValue = function()
             if kind == "Textbox" then return control.Text end
             if kind == "Color" then return control.Color end
@@ -990,7 +998,7 @@ local function RegisterControlForPalette(container, info, control, kind)
     if type(original) == "function" then
         control[refreshMethod] = function(self, ...)
             local values = table.pack(original(self, ...))
-            if entry.Published then RefreshPaletteValue() end
+            if entry.Published and not (kind == "Color" and control.Rainbow) then RefreshPaletteValue() end
             return table.unpack(values, 1, values.n)
         end
     end
@@ -1206,7 +1214,7 @@ local BaseComponents = {}  do
             Parent = ActualButton
         })
 
-        local ButtonIcons = {["Save Position"] = "map-pin", ["Reset Position"] = "rotate-ccw", ["Unload"] = "power", ["Create Config"] = "plus", ["Load config"] = "download", ["Delete config"] = "trash", ["Overwrite config"] = "pencil-line", ["Set autoload"] = "route", ["Reset autoload"] = "rotate-ccw", ["Refresh list"] = "brush-cleaning"}
+        local ButtonIcons = {["Save Position"] = "map-pin", ["Reset Position"] = "rotate-ccw", ["Unload"] = "power", ["Create Config"] = "plus", ["Load config"] = "download", ["Delete config"] = "trash", ["Overwrite config"] = "pencil-line", ["Set autoload"] = "cloud", ["Reset autoload"] = "rotate-ccw", ["Refresh list"] = "brush-cleaning"}
         local IconName = options.Icon or ButtonIcons[options.Name]
         local IconDefinition = IconName and Library:GetIcon(IconName)
         if IconDefinition then
@@ -1299,6 +1307,7 @@ local BaseComponents = {}  do
     end
 
     function Components:AddToggle(options: ToggleOptions)
+        local IsCheckbox = options._Checkbox == true
         local ToggleHolder = Create("Frame", {
             BackgroundTransparency = 1,
             Size = UDim2.new(1, 0, 0, 32),
@@ -1320,6 +1329,7 @@ local BaseComponents = {}  do
             Text = options.Name or "Toggle",
             TextColor3 = ThemeColor(255, 255, 255),
             TextScaled = false, TextSize = 15,
+            TextTruncate = Enum.TextTruncate.AtEnd,
             TextTransparency = ThemeTextAlpha(0.5),
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = ToggleHolder
@@ -1338,12 +1348,12 @@ local BaseComponents = {}  do
             BackgroundColor3 = ThemeColor(35, 35, 35),
             BackgroundTransparency = 0,
             Position = UDim2.fromScale(1, 0.5),
-            Size = UDim2.fromOffset(32, 16),
+            Size = IsCheckbox and UDim2.fromOffset(21, 21) or UDim2.fromOffset(32, 16),
             Text = "",
             Parent = ToggleHolder
         })
 
-        Create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = ToggleButton })
+        Create("UICorner", { CornerRadius = IsCheckbox and UDim.new(0, 4) or UDim.new(1, 0), Parent = ToggleButton })
         Create("UIPadding", {
             PaddingBottom = UDim.new(0, 2),
             PaddingLeft = UDim.new(0, 2),
@@ -1369,6 +1379,13 @@ local BaseComponents = {}  do
 
         ToggleIcon:SetAttribute("ThemeColorIgnore", true)
         Create("UICorner", { CornerRadius = UDim.new(1, 0), Parent = ToggleIcon })
+        local CheckboxMark
+        if IsCheckbox then
+            ToggleIcon.BackgroundTransparency = 1
+            CheckboxMark = Create("ImageLabel", {Name = "CheckboxMark", BackgroundTransparency = 1, Image = "", ImageColor3 = Color3.new(1,1,1), ImageTransparency = 1, Size = UDim2.fromScale(1,1), Parent = ToggleIcon})
+            CheckboxMark:SetAttribute("ThemeColorIgnore", true)
+            Library:ApplyIcon(CheckboxMark, Library:GetIcon("check"))
+        end
 
         local LockedIcon = Create("Frame", {
             Name = "LockedToggleFrame",
@@ -1411,8 +1428,10 @@ local BaseComponents = {}  do
                 Position = UDim2.new(1, -38, 0.5, 0), Size = UDim2.fromOffset(17, 17),
                 Image = "", ImageTransparency = 0.5, Parent = ToggleHolder
             })
-            Library:ApplyIcon(icon, Library:GetIcon("sliders-horizontal"))
-            ToggleText:FindFirstChildOfClass("UIPadding").PaddingRight = UDim.new(0, 60)
+            Toggle.OptionsIcon = icon
+            if Toggle.KeyPicker then icon.Position = UDim2.new(1, -(Toggle._KeyWidth or 82) - 42, 0.5, 0) end
+            Library:ApplyIcon(icon, Library:GetIcon("ellipsis"))
+            ToggleText:FindFirstChildOfClass("UIPadding").PaddingRight = UDim.new(0, Toggle.KeyPicker and ((Toggle._KeyWidth or 82) + 64) or 60)
             local popup = Create("CanvasGroup", {
                 Name = "ToggleOptions",
                 BackgroundColor3 = ThemeColor(25, 25, 25),
@@ -1670,7 +1689,7 @@ local BaseComponents = {}  do
             else
                 ToggleIcon.BackgroundColor3 = Toggle.Value and Color3.fromRGB(255, 255, 255) or ThemeColor(140, 140, 140)
                 ToggleButton.BackgroundColor3 = Toggle.Value and enabledToggleColor or ThemeColor(35, 35, 35)
-                Tween(ToggleIcon, FastTween, {Position = Toggle.Value and UDim2.fromOffset(16, 0) or UDim2.fromOffset(0, 0)})
+                if CheckboxMark then Tween(CheckboxMark, FastTween, {ImageTransparency = Toggle.Value and 0 or 1}) else Tween(ToggleIcon, FastTween, {Position = Toggle.Value and UDim2.fromOffset(16, 0) or UDim2.fromOffset(0, 0)}) end
                 ToggleStroke.Color = Toggle.Value and enabledToggleColor or (Toggle.Hovering and hoveringToggleColor or defaultToggleColor)
             end
         end
@@ -1680,14 +1699,54 @@ local BaseComponents = {}  do
             Toggle.Value = newValue
 
             ToggleIcon.BackgroundColor3 = Toggle.Value and Color3.fromRGB(255, 255, 255) or ThemeColor(140, 140, 140)
-                ToggleButton.BackgroundColor3 = Toggle.Value and enabledToggleColor or ThemeColor(35, 35, 35)
-            Tween(ToggleIcon, FastTween, {Position = Toggle.Value and UDim2.fromOffset(16, 0) or UDim2.fromOffset(0, 0)})
+            Tween(ToggleButton, FastTween, {BackgroundColor3 = Toggle.Value and enabledToggleColor or ThemeColor(35, 35, 35)})
+            if CheckboxMark then Tween(CheckboxMark, FastTween, {ImageTransparency = Toggle.Value and 0 or 1}) else Tween(ToggleIcon, FastTween, {Position = Toggle.Value and UDim2.fromOffset(16, 0) or UDim2.fromOffset(0, 0)}) end
             ToggleStroke.Color = Toggle.Value and enabledToggleColor or (Toggle.Hovering and hoveringToggleColor or defaultToggleColor)
 
             if Toggle.Value ~= oldValue then
                 Library:SafeCallback(options.Callback, Toggle.Value, oldValue)
             end
+            if Toggle.KeyPicker and Toggle.KeyPicker.RefreshList then Toggle.KeyPicker:RefreshList() end
         end
+
+        function Toggle:AddKeybind(keyOptions)
+            keyOptions = type(keyOptions) == "table" and table.clone(keyOptions) or {Keybind = keyOptions}
+            keyOptions.Name = keyOptions.Name or ((options.Name or "Toggle") .. " Keybind")
+            keyOptions._Inline = true
+            keyOptions._Toggle = Toggle
+            local callback = keyOptions.Callback
+            local picker
+            keyOptions.Callback = function(state, oldState)
+                local mode = picker and picker.Mode or keyOptions.Mode or "Toggle"
+                if not Toggle.Locked then
+                    if mode == "Hold" then Toggle:Set(state)
+                    elseif mode == "Always" then Toggle:Set(true)
+                    elseif not (picker and picker.ModeChanging) then Toggle:Set(not Toggle.Value) end
+                end
+                if callback then Library:SafeCallback(callback, state, oldState) end
+            end
+            picker = Components.AddKeyPicker(self._PaletteContainer, keyOptions)
+            self.KeyPicker = picker
+            picker.Holder.Parent = ToggleHolder
+            picker.Holder.AnchorPoint = Vector2.new(1, 0.5)
+            picker.Holder.Position = UDim2.new(1, 0, 0.5, 0)
+            local holderPadding = picker.Holder:FindFirstChildOfClass("UIPadding")
+            if holderPadding then holderPadding:Destroy() end
+            picker.Label.Visible = false
+            local function layoutInlineKey()
+                local width = picker.Button.Size.X.Offset + (keyOptions.Clearable == false and 0 or 29)
+                self._KeyWidth = width
+                picker.Holder.Size = UDim2.fromOffset(width, 32)
+                ToggleButton.Position = UDim2.new(1, -width - 4, 0.5, 0)
+                LockedIcon.Position = UDim2.new(1, -width - 4, 0.5, 0)
+                ToggleText:FindFirstChildOfClass("UIPadding").PaddingRight = UDim.new(0, width + (self.OptionsIcon and 64 or 40))
+                if self.OptionsIcon then self.OptionsIcon.Position = UDim2.new(1, -width - 42, 0.5, 0) end
+            end
+            Library:AddConnection(picker.Button:GetPropertyChangedSignal("Size"):Connect(layoutInlineKey))
+            layoutInlineKey()
+            return picker
+        end
+        Toggle._PaletteContainer = self
 
         if options.Flag then
             Library.Flags[options.Flag] = Toggle
@@ -1720,7 +1779,14 @@ local BaseComponents = {}  do
         end)
         Toggle:Set(Toggle.Value)
     RegisterControlForPalette(self, options, Toggle, "Toggle")
+        if options.Keybind then Toggle:AddKeybind({Keybind = options.Keybind, Mode = options.KeybindMode, Clearable = options.Clearable}) end
         return Toggle
+    end
+
+    function Components:AddCheckbox(options)
+        local settings = table.clone(options or {})
+        settings._Checkbox = true
+        return Components.AddToggle(self, settings)
     end
 
 function Components:AddSlider(options: SliderOptions)
@@ -1858,6 +1924,10 @@ function Components:AddSlider(options: SliderOptions)
         local custom = nil
         if options.FormatDisplayValue then
             custom = options.FormatDisplayValue(Slider, Slider.Value)
+        elseif type(options.DisplayFormat) == "function" then
+            local ok, value = pcall(options.DisplayFormat, Slider.Value, Slider); if ok then custom = value end
+        elseif type(options.DisplayFormat) == "string" then
+            local ok, value = pcall(string.format, options.DisplayFormat, Slider.Value); if ok then custom = value end
         end
 
         if custom then
@@ -2073,6 +2143,7 @@ function Components:AddTextbox(options: TextboxOptions)
         Text = options.Text or "",
         TextColor3 = ThemeColor(220, 220, 220),
         TextScaled = false, TextSize = 15,
+        TextTruncate = Enum.TextTruncate.AtEnd,
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = TextboxHolder
     })
@@ -2309,6 +2380,7 @@ function Components:AddDropdown(options: DropdownOptions)
         Size = UDim2.new(1, 0, 0, 32),
         TextColor3 = ThemeColor(220, 220, 220),
         TextScaled = false, TextSize = 15,
+        TextTruncate = Enum.TextTruncate.AtEnd,
         TextXAlignment = Enum.TextXAlignment.Left,
         Parent = ButtonsHolder
     })
@@ -2316,7 +2388,7 @@ function Components:AddDropdown(options: DropdownOptions)
     Create("UIPadding", {
         PaddingBottom = UDim.new(0, 6),
         PaddingLeft = UDim.new(0, 6),
-        PaddingRight = UDim.new(0, 30),
+        PaddingRight = UDim.new(0, 26),
         PaddingTop = UDim.new(0, 6),
         Parent = CurrentButton
     })
@@ -2411,6 +2483,7 @@ function Components:AddDropdown(options: DropdownOptions)
 
         AllowNull = true,
         Multi = options.Multi or false,
+        Selectable = options.Multi == true and options.Selectable == true,
         Searchable = options.Searchable == true,
         SearchText = "",
         Name = options.Name or "Dropdown",
@@ -2434,6 +2507,18 @@ function Components:AddDropdown(options: DropdownOptions)
     local BASE_HEIGHT = 32
     local HOLDER_PAD = 10
     local ITEM_HEIGHT = 32
+    local selectionBar, selectAllButton, deselectAllButton
+    if Dropdown.Selectable then
+        selectionBar = Create("Frame", {Name = "SelectionButtons", BackgroundTransparency = 1, Size = UDim2.new(1,-12,0,30), Visible = false, Parent = ButtonsHolder})
+        local function selectionButton(text, x)
+            local button = Create("TextButton", {Name = text, AutoButtonColor = false, BackgroundColor3 = ThemeColor(35,35,35), Position = UDim2.new(x,0,0,1), Size = UDim2.new(0.5,-3,0,26), Text = text, TextColor3 = ThemeColor(220,220,220), TextSize = 12, FontFace = regularFont, Parent = selectionBar})
+            Create("UICorner", {CornerRadius = UDim.new(0,5), Parent = button})
+            Create("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(60,60,60), Transparency = 0.2, Parent = button})
+            return button
+        end
+        selectAllButton = selectionButton("Select All", 0)
+        deselectAllButton = selectionButton("Deselect All", 0.5)
+    end
 
     local OpenTweenInfo = TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
     local CloseTweenInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -2531,8 +2616,9 @@ function Components:AddDropdown(options: DropdownOptions)
     local function ApplyProgress(p)
         progress = p
         local searchSlot = SearchBox and (SEARCH_GAP + SEARCH_HEIGHT) or 0
+        local selectSlot = selectionBar and 38 or 0
 
-        local openButtonsH = BASE_HEIGHT + searchSlot + math.min(listHeight, MaxListHeight())
+        local openButtonsH = BASE_HEIGHT + searchSlot + selectSlot + math.min(listHeight, MaxListHeight())
         local closedButtonsH = BASE_HEIGHT
 
         local buttonsH = closedButtonsH + (openButtonsH - closedButtonsH) * p
@@ -2541,7 +2627,8 @@ function Components:AddDropdown(options: DropdownOptions)
         DropdownHolder.Size = UDim2.new(1, 0, 0, holderH)
         ButtonsHolder.Size = UDim2.new(1, 0, 0, buttonsH)
 
-        OptionsHolder.Position = UDim2.fromOffset(0, BASE_HEIGHT + searchSlot * p)
+        OptionsHolder.Position = UDim2.fromOffset(0, BASE_HEIGHT + (searchSlot + selectSlot) * p)
+        if selectionBar then selectionBar.Position = UDim2.fromOffset(6, BASE_HEIGHT + searchSlot * p + 3); selectionBar.Visible = p > 0.001 end
 
         if SearchBox then
             local searchY = BASE_HEIGHT + SEARCH_GAP * p
@@ -2771,6 +2858,12 @@ function Components:AddDropdown(options: DropdownOptions)
                     Table[Val] = true
                 end
             end
+            if not Dropdown.AllowNull and not next(Table) then
+                local default = options.Default or options.Value
+                if type(default) == "table" then for key, active in pairs(default) do local candidate = type(key) == "number" and active or key; if ValueExists(candidate) and not IsValueDisabled(candidate) then Table[candidate] = true; break end end
+                elseif default ~= nil and ValueExists(default) and not IsValueDisabled(default) then Table[default] = true end
+                if not next(Table) then for key, item in pairs(Dropdown.Values) do local candidate = IsSequentialArray(Dropdown.Values) and item or key; if not IsValueDisabled(candidate, item) then Table[candidate] = true; break end end end
+            end
             Dropdown.Value = Table
         else
             if ValueExists(Value) and not IsValueDisabled(Value) then
@@ -2783,6 +2876,25 @@ function Components:AddDropdown(options: DropdownOptions)
         Dropdown:UpdateButtons()
         Library:SafeCallback(options.Callback, Dropdown.Value)
     end
+
+    function Dropdown:SelectAll()
+        if not self.Selectable or self.Locked then return end
+        local selected = {}
+        for key, value in pairs(self.Values) do local option = IsSequentialArray(self.Values) and value or key; if not IsValueDisabled(option, value) then selected[option] = true end end
+        self:SetValue(selected)
+    end
+    function Dropdown:DeselectAll()
+        if not self.Selectable or self.Locked then return end
+        local selected = {}
+        if not self.AllowNull then
+            local defaults = options.Default or options.Value
+            if type(defaults) == "table" then for key, value in pairs(defaults) do local option = type(key) == "number" and value or key; if ValueExists(option) and not IsValueDisabled(option) then selected[option] = true; break end end
+            elseif defaults ~= nil and ValueExists(defaults) and not IsValueDisabled(defaults) then selected[defaults] = true end
+            if not next(selected) then for key, value in pairs(self.Values) do local option = IsSequentialArray(self.Values) and value or key; if not IsValueDisabled(option, value) then selected[option] = true; break end end end
+        end
+        self:SetValue(selected)
+    end
+    if selectionBar then selectAllButton.Activated:Connect(function() Dropdown:SelectAll() end); deselectAllButton.Activated:Connect(function() Dropdown:DeselectAll() end) end
 
     function Dropdown:SetValues(Values)
         Dropdown.Values = Values
@@ -2975,6 +3087,7 @@ function Components:AddDropdown(options: DropdownOptions)
                 break
             end
         end
+        if Dropdown.Selectable and not Dropdown.AllowNull and not next(Dropdown.Value) then Dropdown:DeselectAll() end
 
         Dropdown:BuildList()
         Dropdown:Update()
@@ -2994,6 +3107,38 @@ function Components:AddDropdown(options: DropdownOptions)
     return Dropdown
 end
 
+
+    local function EnsureKeybindFrame()
+        if Library.KeybindFrame and Library.KeybindFrame.Parent then return Library.KeybindFrame end
+        local frame = Create("CanvasGroup", {Name = "KeybindList", AnchorPoint = Vector2.new(0,0.5), Position = UDim2.new(0,10,0.5,0), Size = UDim2.fromOffset(270,36), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = ThemeColor(25,25,25), ZIndex = 30, Parent = UI})
+        Create("UICorner", {CornerRadius = UDim.new(0,8), Parent = frame})
+        AddAnimatedBorder(frame)
+        Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Parent = frame})
+        local header = Create("TextButton", {Name = "Header", LayoutOrder = -1, AutoButtonColor = false, Active = true, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,30), Text = "", ZIndex = 31, Parent = frame})
+        local icon = Create("ImageLabel", {BackgroundTransparency = 1, Image = "", ImageColor3 = ThemeColor(200,200,200), Position = UDim2.fromOffset(9,7), Size = UDim2.fromOffset(16,16), ZIndex = 32, Parent = header})
+        Library:ApplyIcon(icon, Library:GetIcon("keyboard"))
+        Create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(31,0), Size = UDim2.new(1,-60,1,0), Text = "Keybinds", TextColor3 = ThemeColor(220,220,220), TextSize = 15, FontFace = semiBoldFont, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = header})
+        local minimize = Create("ImageButton", {Name = "Minimize", AutoButtonColor = false, BackgroundTransparency = 1, AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-7,0.5,0), Size = UDim2.fromOffset(18,18), Image = "", ImageColor3 = ThemeColor(220,220,220), ZIndex = 32, Parent = header})
+        Library:ApplyIcon(minimize, Library:GetIcon("chevron-up"))
+        MakeDraggable(header, frame)
+        local minimizeGeneration = 0
+        minimize.Activated:Connect(function()
+            Library.KeybindFrameMinimized = not Library.KeybindFrameMinimized
+            minimizeGeneration += 1
+            local generation = minimizeGeneration
+            Tween(minimize, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Rotation = Library.KeybindFrameMinimized and 180 or 0})
+            for _, child in ipairs(frame:GetChildren()) do if child.Name == "KeybindEntry" then
+                child.ClipsDescendants = true
+                if not Library.KeybindFrameMinimized then child.Visible = child:GetAttribute("Eligible") == true end
+                Tween(child, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Size = UDim2.new(1,0,0,Library.KeybindFrameMinimized and 0 or 28)})
+                if Library.KeybindFrameMinimized then task.delay(0.2, function() if generation == minimizeGeneration and child.Parent then child.Visible = false end end) end
+            end end
+        end)
+        Library.KeybindFrame = frame
+        Library.KeybindFrameEnabled = true
+        function Library:SetKeybindFrameVisible(visible) self.KeybindFrameEnabled = visible == true; if self.KeybindFrame then self.KeybindFrame.Visible = self.KeybindFrameEnabled end end
+        return frame
+    end
 
     function Components:AddKeyPicker(options: KeyPickerOptions)
         local KeyPickerHolder = Create("Frame", {
@@ -3058,6 +3203,8 @@ end
             Text = "",
             Parent = KeyPickerHolder,
         })
+        editKey.Visible = options.Clearable ~= false
+        if options.Clearable == false then KeyPickerButton.Position = UDim2.new(1, 0, 0.5, 0) end
         Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = editKey })
         Create("UIStroke", { ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(60, 60, 60), Parent = editKey })
         local editIcon = Create("ImageLabel", {
@@ -3075,15 +3222,111 @@ end
             Keybind = options.Keybind or nil,
             Mode = options.Mode or "Toggle",
             Type = "KeyPicker",
+            Holder = KeyPickerHolder,
+            Label = KeyPickerText,
+            Button = KeyPickerButton,
         }
+
+        local frame = EnsureKeybindFrame()
+        local listRow = Create("TextButton", {Name = "KeybindEntry", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), Text = "", ClipsDescendants = true, ZIndex = 31, Parent = frame})
+        local rowIcon = Create("ImageLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(8,6), Size = UDim2.fromOffset(16,16), Image = "", ImageColor3 = ThemeColor(200,200,200), ZIndex = 32, Parent = listRow})
+        Library:ApplyIcon(rowIcon, Library:GetIcon("key-square"))
+        local rowTitle = Create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(29,0), Size = UDim2.new(1,-145,1,0), Text = "", TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = ThemeColor(220,220,220), TextSize = 13, FontFace = regularFont, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = listRow})
+        local keyText = Create("TextLabel", {BackgroundTransparency = 1, AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-86,0.5,0), Size = UDim2.fromOffset(40,20), Text = "", TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = ThemeColor(200,200,200), TextSize = 12, FontFace = regularFont, ZIndex = 32, Parent = listRow})
+        local modeBadge = Create("TextLabel", {Name = "ModeBadge", AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-32,0.5,0), Size = UDim2.fromOffset(50,20), Text = "", TextColor3 = ThemeColor(200,200,200), BackgroundColor3 = ThemeColor(35,35,35), TextSize = 11, FontFace = regularFont, ZIndex = 32, Parent = listRow})
+        Create("UICorner", {CornerRadius = UDim.new(0,4), Parent = modeBadge}); Create("UIStroke", {Color = ThemeColor(80,80,80), Transparency = 0.25, Parent = modeBadge})
+        local rowCheck = Create("ImageLabel", {Name = "Check", AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-7,0.5,0), Size = UDim2.fromOffset(18,18), BackgroundColor3 = ThemeColor(35,35,35), Image = "", ZIndex = 32, Parent = listRow})
+        Create("UICorner", {CornerRadius = UDim.new(0,4), Parent = rowCheck})
+        Create("UIStroke", {Color = ThemeColor(60,60,60), Parent = rowCheck})
+        local rowMark = Create("ImageLabel", {BackgroundTransparency = 1, Image = "", ImageColor3 = Color3.new(1,1,1), Size = UDim2.fromScale(1,1), ZIndex = 33, Parent = rowCheck})
+        Library:ApplyIcon(rowMark, Library:GetIcon("check"))
+        local function refreshList()
+            local eligible = options.NoUI ~= true and (KeyPicker.Keybind ~= nil or KeyPicker.Mode == "Always")
+            listRow:SetAttribute("Eligible", eligible)
+            listRow.Visible = eligible and not Library.KeybindFrameMinimized
+            rowTitle.Text = options.Name or "Keybind"
+            keyText.Text = "[" .. (KeyPicker.Keybind and KeyPicker.Keybind.Name or "None") .. "]"
+            modeBadge.Text = KeyPicker.Mode
+            local active = options._Toggle and options._Toggle.Value or (not options._Toggle and KeyPicker.State)
+            rowTitle.TextColor3 = active and ThemeColor(60,200,100) or ThemeColor(200,200,200)
+            rowCheck.BackgroundColor3 = active and ThemeColor(60,200,100) or ThemeColor(35,35,35)
+            rowMark.Visible = active == true
+        end
+        KeyPicker.RefreshList = refreshList
+        listRow.Activated:Connect(function()
+            if KeyPicker.Locked or KeyPicker.Mode == "Always" or KeyPicker.Mode == "Hold" then return end
+            if options._Toggle then if not options._Toggle.Locked then options._Toggle:Set(not options._Toggle.Value) end else KeyPicker:SetState(not KeyPicker.State) end
+        end)
+        local holdingRow
+        listRow.InputBegan:Connect(function(input)
+            if KeyPicker.Mode ~= "Hold" or KeyPicker.Locked or (input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+            holdingRow = input
+            if options._Toggle then if not options._Toggle.Locked then options._Toggle:Set(true) end else KeyPicker:SetState(true) end
+        end)
+        Library:AddConnection(UserInputService.InputEnded:Connect(function(input)
+            if holdingRow and input == holdingRow then holdingRow = nil; if options._Toggle then options._Toggle:Set(false) else KeyPicker:SetState(false) end end
+        end))
+        local modeMenu = Create("CanvasGroup", {Name = "KeybindModeMenu", BackgroundColor3 = ThemeColor(25,25,25), Size = UDim2.fromOffset(116,87), Visible = false, GroupTransparency = 1, ZIndex = 70, Parent = UI})
+        KeyPicker.ModeMenu = modeMenu
+        Create("UICorner", {CornerRadius = UDim.new(0,6), Parent = modeMenu})
+        Create("UIStroke", {Color = ThemeColor(60,60,60), Parent = modeMenu})
+        Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Parent = modeMenu})
+        local modeButtons = {}
+        local modeGeneration = 0
+        local function setModeMenuVisible(show)
+            modeGeneration += 1
+            local generation = modeGeneration
+            if show then modeMenu.Visible = true end
+            local tween = TweenService:Create(modeMenu, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {GroupTransparency = show and 0 or 1})
+            tween:Play()
+            if not show then tween.Completed:Connect(function(state) if generation == modeGeneration and state == Enum.PlaybackState.Completed then modeMenu.Visible = false end end) end
+        end
+        function KeyPicker:SetMode(mode)
+            if mode ~= "Always" and mode ~= "Hold" and mode ~= "Toggle" then return false end
+            if options.FixedMode and mode ~= "Toggle" then return false end
+            if holdingRow then holdingRow = nil; if options._Toggle then options._Toggle:Set(false) else self:SetState(false) end end
+            self.Mode = mode
+            self.ModeChanging = true
+            self:SetState(mode == "Always")
+            self.ModeChanging = false
+            if mode == "Always" and options._Toggle and not options._Toggle.Locked then options._Toggle:Set(true) end
+            for name, button in pairs(modeButtons) do button.TextColor3 = name == mode and ThemeColor(255,255,255) or ThemeColor(200,200,200); button.BackgroundTransparency = name == mode and 0 or 1 end
+            refreshList()
+            return true
+        end
+        for order, mode in ipairs({"Always", "Hold", "Toggle"}) do
+            local button = Create("TextButton", {Name = mode, AutoButtonColor = false, BackgroundColor3 = ThemeColor(25,25,25):Lerp(ThemeColor(60,200,100),0.13), BackgroundTransparency = 1, Size = UDim2.new(1,0,0,29), LayoutOrder = order, Text = mode, TextColor3 = ThemeColor(200,200,200), FontFace = regularFont, TextSize = 12, ZIndex = 71, Parent = modeMenu})
+            if order > 1 then Create("Frame", {BackgroundColor3 = ThemeColor(60,60,60), BackgroundTransparency = 0.4, BorderSizePixel = 0, Size = UDim2.new(1,0,0,1), ZIndex = 72, Parent = button}) end
+            modeButtons[mode] = button
+            button.Activated:Connect(function() KeyPicker:SetMode(mode); setModeMenuVisible(false) end)
+        end
+        local function toggleModeMenu(anchor)
+            if KeyPicker.Locked or KeyPicker.Picking or options.FixedMode then return end
+            local inset = game:GetService("GuiService"):GetGuiInset()
+            local camera = workspace.CurrentCamera
+            local view = camera and camera.ViewportSize or Vector2.new(800,600)
+            local right = frame.AbsolutePosition.X + frame.AbsoluteSize.X + 7
+            local x = math.clamp(right + 116 <= view.X and right or frame.AbsolutePosition.X - 123, 0, math.max(0, view.X - 116))
+            local y = math.clamp(anchor.AbsolutePosition.Y - inset.Y - 20, 0, math.max(0, view.Y - inset.Y - 87))
+            modeMenu.Position = UDim2.fromOffset(x,y)
+            setModeMenuVisible(not modeMenu.Visible)
+        end
+        KeyPickerButton.MouseButton2Click:Connect(function() toggleModeMenu(KeyPickerButton) end)
+        listRow.MouseButton2Click:Connect(function() toggleModeMenu(listRow) end)
+        Library:AddConnection(UserInputService.InputBegan:Connect(function(input)
+            if not modeMenu.Visible or (input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+            local p, a, size = input.Position, modeMenu.AbsolutePosition, modeMenu.AbsoluteSize
+            if p.X < a.X or p.X > a.X + size.X or p.Y < a.Y or p.Y > a.Y + size.Y then setModeMenuVisible(false) end
+        end))
 
         function KeyPicker:SetKeybind(keybind, picking)
             if picking then KeyPicker:Update(KeyPicker.Keybind, true) return end
             KeyPicker.Keybind = GetKeybindFromString(keybind)
             KeyPicker.KeyPressed = nil
             KeyPicker.Picking = false
-            if not KeyPicker.Keybind and KeyPicker.State then KeyPicker:SetState(false) end
+            if not KeyPicker.Keybind and KeyPicker.State and KeyPicker.Mode ~= "Always" then KeyPicker:SetState(false) end
             KeyPicker:Update(KeyPicker.Keybind, false)
+            refreshList()
         end
 
         function KeyPicker:SetValue(value) self:SetKeybind(value) end
@@ -3096,21 +3339,22 @@ end
             if KeyPicker.State ~= oldState then
                 Library:SafeCallback(options.Callback, KeyPicker.State, oldState)
             end
+            refreshList()
         end
 
         function KeyPicker:SetLocked(locked)
             KeyPicker.Locked = locked == true
             KeyPickerButton.Visible = not KeyPicker.Locked
-            editKey.Visible = not KeyPicker.Locked
+            editKey.Visible = not KeyPicker.Locked and options.Clearable ~= false
             KeyPickerText.TextTransparency = ThemeTextAlpha(KeyPicker.Locked and 0.75 or 0.5)
         end
 
         function KeyPicker:Update(keybind, picking)
             local keyText = picking and "..." or (keybind and (keyCodesName[keybind] or string.sub(keybind.Name, 1, 6)) or "None")
             local size = GetTextBounds(keyText, mediumFont, 14, Library.UISize - 24)
-            local width = math.clamp((size and size.X or 26) + 16, 40, 100)
+            local width = math.clamp((size and size.X or 26) + 16, options._Inline and 28 or 40, options._Inline and 52 or 100)
             KeyPickerButton.Size = UDim2.fromOffset(width, 24)
-            KeyPickerText.Size = UDim2.new(1, -(width + 35), 1, 0)
+            KeyPickerText.Size = UDim2.new(1, -(width + (options.Clearable == false and 6 or 35)), 1, 0)
             KeyPickerButton.Text = keyText
         end
 
@@ -3142,7 +3386,7 @@ end
             end)
 
             if isKeyCode and (inputObject.KeyCode == Enum.KeyCode.Escape or inputObject.KeyCode == Enum.KeyCode.Backspace or inputObject.KeyCode == Enum.KeyCode.Delete) then
-                KeyPicker:SetKeybind(nil)
+                if options.Clearable ~= false then KeyPicker:SetKeybind(nil) else KeyPicker:SetKeybind(KeyPicker.Keybind) end
                 KeyPicker.Picking = false
                 return
             end
@@ -3161,7 +3405,7 @@ end
 
         Library:AddConnection(UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
             if Library.ActiveKeyPicker then return end
-            if KeyPicker.Keybind and (input.KeyCode == KeyPicker.Keybind or input.UserInputType == KeyPicker.Keybind) and not KeyPicker.Picking and not gameProcessedEvent then
+            if KeyPicker.Mode ~= "Always" and KeyPicker.Keybind and (input.KeyCode == KeyPicker.Keybind or input.UserInputType == KeyPicker.Keybind) and not KeyPicker.Picking and not gameProcessedEvent and not UserInputService:GetFocusedTextBox() then
                 if KeyPicker.Mode == "Hold" then
                     KeyPicker:SetState(true)
                 else
@@ -3180,6 +3424,7 @@ end
         end))
 
         KeyPicker:SetKeybind(KeyPicker.Keybind)
+        KeyPicker:SetMode(KeyPicker.Mode)
     RegisterControlForPalette(self, options, KeyPicker, "Keybind")
         return KeyPicker
     end
@@ -3215,6 +3460,7 @@ end
             Color = ThemeColor(60, 60, 60),
             Parent = ButtonsHolder
         })
+        Create("UIGradient", {Color = ColorSequence.new(Color3.new(1,1,1), Color3.fromRGB(230,230,230)), Rotation = 90, Parent = ButtonsHolder})
 
         local OpenButton: TextButton = Create("TextButton", {
             TextYAlignment = Enum.TextYAlignment.Center,
@@ -3235,13 +3481,15 @@ end
             PaddingTop = UDim.new(0, 6),
             Parent = OpenButton
         })
+        Create("Frame", {Name = "ColorHeaderDivider", BorderSizePixel = 0, BackgroundColor3 = ThemeColor(80,80,80), BackgroundTransparency = 0.55, Position = UDim2.fromOffset(6,31), Size = UDim2.new(1,-12,0,1), Parent = ButtonsHolder})
 
+        local pickerScroll = Create("Frame", {Name = "PickerContents", BackgroundTransparency = 1, BorderSizePixel = 0, Position = UDim2.fromOffset(0,32), Size = UDim2.new(1,0,1,-32), Parent = ButtonsHolder})
         local ColorHolder = Create("Frame", {
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(0, 32),
+            Position = UDim2.fromOffset(0, 0),
             Size = UDim2.new(1, 0, 0, Library.UISize - 50),
             Visible = false,
-            Parent = ButtonsHolder
+            Parent = pickerScroll
         })
 
         Create("UIPadding", {
@@ -3255,8 +3503,7 @@ end
         local ColorImage = Create("ImageLabel", {
             BackgroundColor3 = options.Color or Color3.new(1, 1, 1),
             Image = "rbxassetid://4155801252",
-            Size = UDim2.fromScale(1, 1),
-            SizeConstraint = Enum.SizeConstraint.RelativeYY,
+            Size = UDim2.new(1, -22, 1, 0),
             Parent = ColorHolder
         })
 
@@ -3328,6 +3575,7 @@ end
 
         ColorIndicator:SetAttribute("ThemeColorIgnore", true)
         Create("UICorner", { CornerRadius = UDim.new(0, 6), Parent = ColorIndicator })
+        Create("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(80,80,80), Transparency = 0.35, Parent = ColorIndicator})
 
         local ColorPicker = {
             DraggingColor = false,
@@ -3347,15 +3595,16 @@ end
         local closeTweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
         local CLOSED_HEIGHT = 42
         local controlsHeight = 36 + (ColorPicker.AllowTrans and 42 or 0) + (ColorPicker.AllowRainbow and 32 or 0)
-        local OPEN_HEIGHT = Library.UISize - 8 + controlsHeight
+        local bodyHeight = Library.UISize - 50 + controlsHeight
+        local OPEN_HEIGHT = CLOSED_HEIGHT + bodyHeight
         local activeTween
 
         local controls = Create("Frame", {
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(0, 32 + Library.UISize - 50),
+            Position = UDim2.fromOffset(0, Library.UISize - 50),
             Size = UDim2.new(1, 0, 0, controlsHeight),
             Visible = false,
-            Parent = ButtonsHolder,
+            Parent = pickerScroll,
         })
         local hexInput = Create("TextBox", {
             BackgroundColor3 = ThemeColor(25, 25, 25),
@@ -3423,17 +3672,19 @@ end
                 Parent = controls,
             })
             transValue = Create("TextLabel", {
-                BackgroundTransparency = 1,
+                BackgroundColor3 = ThemeColor(35,35,35),
                 FontFace = regularFont,
                 TextSize = 12,
                 TextColor3 = ThemeColor(255, 255, 255),
                 TextTransparency = ThemeTextAlpha(0.5),
-                TextXAlignment = Enum.TextXAlignment.Right,
+                TextXAlignment = Enum.TextXAlignment.Center,
                 Position = UDim2.new(1, -54, 0, y),
                 Size = UDim2.fromOffset(48, 22),
                 Text = "0%",
                 Parent = controls,
             })
+            Create("UICorner", {CornerRadius = UDim.new(0, 6), Parent = transValue})
+            Create("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(60,60,60), Transparency = 0.3, Parent = transValue})
             transBar = Create("TextButton", {
                 BackgroundColor3 = ThemeColor(60, 60, 60),
                 Position = UDim2.fromOffset(6, y + 25),
@@ -3444,20 +3695,23 @@ end
             })
             Create("UICorner", {CornerRadius = UDim.new(1, 0), Parent = transBar})
             transFill = Create("Frame", {
-                BackgroundColor3 = ThemeColor(140, 140, 140),
+                BackgroundColor3 = ThemeColor(60, 200, 100),
                 Size = UDim2.fromScale(0, 1),
                 BorderSizePixel = 0,
                 Parent = transBar,
             })
             Create("UICorner", {CornerRadius = UDim.new(1, 0), Parent = transFill})
+            local transKnob = Create("Frame", {Name = "TransparencyKnob", AnchorPoint = Vector2.new(0.5,0.5), Position = UDim2.new(1,0,0.5,0), Size = UDim2.fromOffset(12,12), BackgroundColor3 = Color3.new(1,1,1), Parent = transFill})
+            Create("UICorner", {CornerRadius = UDim.new(1,0), Parent = transKnob})
+            Create("UIStroke", {Color = ThemeColor(60,200,100), Parent = transKnob})
             transBar.MouseEnter:Connect(function()
                 if ColorPicker.Locked then return end
-                Tween(transFill, FastTween, {BackgroundColor3 = ThemeColor(200, 200, 200)})
+                Tween(transFill, FastTween, {BackgroundColor3 = ThemeColor(60, 200, 100):Lerp(Color3.new(1,1,1),0.15)})
                 Tween(transBar, FastTween, {BackgroundColor3 = ThemeColor(85, 85, 85)})
                 Tween(transLabel, FastTween, {TextTransparency = ThemeTextAlpha(0.25)})
             end)
             transBar.MouseLeave:Connect(function()
-                Tween(transFill, FastTween, {BackgroundColor3 = ThemeColor(140, 140, 140)})
+                Tween(transFill, FastTween, {BackgroundColor3 = ThemeColor(60, 200, 100)})
                 Tween(transBar, FastTween, {BackgroundColor3 = ThemeColor(60, 60, 60)})
                 Tween(transLabel, FastTween, {TextTransparency = ThemeTextAlpha(0.5)})
             end)
@@ -3478,13 +3732,14 @@ end
             })
             rainbowButton = Create("TextButton", {
                 AutoButtonColor = false,
-                BackgroundTransparency = 1,
+                BackgroundColor3 = ThemeColor(35,35,35),
                 AnchorPoint = Vector2.new(1, 0.5),
                 Position = UDim2.new(1, -6, 0, y + 12),
                 Size = UDim2.fromOffset(32, 16),
                 Text = "",
                 Parent = controls,
             })
+            Create("UIGradient", {Color = ColorSequence.new(Color3.new(1,1,1), Color3.fromRGB(190,190,190)), Rotation = 90, Parent = rainbowButton})
             Create("UICorner", {CornerRadius = UDim.new(1, 0), Parent = rainbowButton})
             Create("UIPadding", {
                 PaddingBottom = UDim.new(0, 2),
@@ -3499,7 +3754,7 @@ end
                 Parent = rainbowButton,
             })
             rainbowKnob = Create("Frame", {
-                BackgroundColor3 = ThemeColor(60, 60, 60),
+                BackgroundColor3 = ThemeColor(140, 140, 140),
                 Size = UDim2.fromScale(1, 1),
                 SizeConstraint = Enum.SizeConstraint.RelativeYY,
                 Parent = rainbowButton,
@@ -3509,7 +3764,7 @@ end
                 if ColorPicker.Locked then return end
                 local base = ColorPicker.Rainbow and enabledToggleColor or defaultToggleColor
                 local color = hovering and base:Lerp(Color3.new(1, 1, 1), 0.3) or base
-                TweenService:Create(rainbowKnob, FastTween, {BackgroundColor3 = color}):Play()
+                Tween(rainbowButton, FastTween, {BackgroundColor3 = ColorPicker.Rainbow and color or ThemeColor(35,35,35)})
                 Tween(rainbowStroke, FastTween, {Color = color})
             end
             rainbowButton.MouseEnter:Connect(function() updateRainbowHover(true) end)
@@ -3550,7 +3805,8 @@ end
             if rainbowButton then
                 local color = ColorPicker.Rainbow and enabledToggleColor or defaultToggleColor
                 rainbowStroke.Color = color
-                rainbowKnob.BackgroundColor3 = color
+                rainbowButton.BackgroundColor3 = ColorPicker.Rainbow and enabledToggleColor or ThemeColor(35,35,35)
+                rainbowKnob.BackgroundColor3 = ColorPicker.Rainbow and Color3.new(1,1,1) or ThemeColor(140,140,140)
                 Tween(rainbowKnob, FastTween, {Position = ColorPicker.Rainbow and UDim2.fromOffset(16, 0) or UDim2.fromOffset(0, 0)})
             end
         end
@@ -4391,7 +4647,13 @@ function Library:CreateWindow(options: WindowOptions)
             PaddingRight = UDim.new(0, 11), PaddingTop = UDim.new(0, 8), Parent = TabButtonText
         })
 
-        local Tab = { Hovering = false, Opened = false, _LastWasSection = false }
+        local Tab = { Hovering = false, Opened = false, Locked = false, _LastWasSection = false }
+        local tabLock = Create("TextButton", {Name = "TabLock", BackgroundTransparency = 0.75, BackgroundColor3 = Color3.new(0,0,0), Size = UDim2.fromScale(1,1), Text = "", AutoButtonColor = false, Visible = false, ZIndex = 50, Parent = TabHolder})
+        function Tab:SetLocked(locked)
+            self.Locked = locked == true
+            tabLock.Visible = self.Locked
+            Library._PaletteLocks[tostring(tabName or "Main")] = self.Locked or nil
+        end
         local panelTween
         local panelTweenId = 0
 
@@ -4417,6 +4679,7 @@ function Library:CreateWindow(options: WindowOptions)
         table.insert(Library.TabAnimations, Tab)
 
         function Tab:Toggle()
+            if self.Locked then return end
             if Library.Mobile and not Tab.Opened then
                 for _, otherTab in MobileTabs do
                     if otherTab ~= Tab and otherTab.Opened then otherTab:Toggle() end
@@ -4488,7 +4751,7 @@ function Library:CreateWindow(options: WindowOptions)
                 Position = UDim2.fromOffset(IconDef and 36 or 11, 0),
                 Size = UDim2.new(1, -(IconDef and 72 or 47), 1, 0),
                 Text = DisplayName, TextColor3 = ThemeColor(220, 220, 220),
-                TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left,
+                TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left,
                 TextTruncate = Enum.TextTruncate.AtEnd, Parent = ButtonFrame,
             })
             local Chevron = Create("ImageLabel", {
@@ -4506,6 +4769,8 @@ function Library:CreateWindow(options: WindowOptions)
                 SortOrder = Enum.SortOrder.LayoutOrder, Parent = Components,
             })
             local ElementSection = {Container = Components, Opened = false, Collapsible = CanMinimize, _PaletteCategory = tostring(tabName or "Main") .. " / " .. DisplayName}
+            local sectionLock = Create("TextButton", {Name = "SectionLock", BackgroundTransparency = 0.75, BackgroundColor3 = Color3.new(0,0,0), Size = UDim2.fromScale(1,1), Text = "", AutoButtonColor = false, Visible = false, ZIndex = 50, Parent = ElementHolder})
+            function ElementSection:SetLocked(locked) self.Locked = locked == true; sectionLock.Visible = self.Locked; Library._PaletteLocks[self._PaletteCategory] = self.Locked or nil end
             local function UpdateSectionHeight()
                 local Scale = Library.Mobile and Library.MobileScale.Scale or 1
                 HeaderBottom.Visible = ElementSection.Opened
@@ -4517,6 +4782,7 @@ function Library:CreateWindow(options: WindowOptions)
                 if Chevron.Visible then Library:ApplyIcon(Chevron, Library:GetIcon(ElementSection.Opened and "chevron-up" or "chevron-down")) end
             end
             function ElementSection:SetOpen(Open)
+                if self.Locked then return end
                 if not self.Collapsible and not Open then return end
                 self.Opened = Open == true
                 UpdateSectionHeight()
@@ -4967,6 +5233,8 @@ function Library:CreateWindow(options: WindowOptions)
         local initialKeybind = savedKeybind == nil and Library.ToggleKeybind or savedKeybind
         Library.ToggleKeybind = UISection:AddKeyPicker({
             Name = "Keybind",
+            NoUI = true,
+            FixedMode = true,
             Keybind = initialKeybind
         })
 
@@ -4974,6 +5242,8 @@ function Library:CreateWindow(options: WindowOptions)
             local picker = Library.ToggleKeybind
             local originalSetKeybind = picker.SetKeybind
             function picker:SetKeybind(keybind, picking)
+                local nextKey = not picking and GetKeybindFromString(keybind)
+                if nextKey and type(Library.CommandPaletteKeybind) == "table" and Library.CommandPaletteKeybind.Keybind == nextKey then self:Update(self.Keybind, false); return false end
                 originalSetKeybind(self, keybind, picking)
                 if not picking then
                     SaveKeybind(self.Keybind)
@@ -4992,11 +5262,14 @@ function Library:CreateWindow(options: WindowOptions)
             end
         end
         local initialPaletteKey = savedPaletteKey == nil and Enum.KeyCode.Semicolon or savedPaletteKey
-        local paletteKeyPicker = UISection:AddKeyPicker({Name = "Palette Keybind", Keybind = initialPaletteKey})
+        if initialPaletteKey and Library.ToggleKeybind.Keybind == initialPaletteKey then initialPaletteKey = Library.ToggleKeybind.Keybind ~= Enum.KeyCode.F4 and Enum.KeyCode.F4 or nil end
+        local paletteKeyPicker = UISection:AddKeyPicker({Name = "Palette Keybind", NoUI = true, FixedMode = true, Keybind = initialPaletteKey})
         Library.CommandPaletteKeybind = paletteKeyPicker
         do
             local originalSetKeybind = paletteKeyPicker.SetKeybind
             function paletteKeyPicker:SetKeybind(keybind, picking)
+                local nextKey = not picking and GetKeybindFromString(keybind)
+                if nextKey and type(Library.ToggleKeybind) == "table" and Library.ToggleKeybind.Keybind == nextKey then self:Update(self.Keybind, false); return false end
                 originalSetKeybind(self, keybind, picking)
                 if picking or not paletteFile then return end
                 pcall(function()
@@ -5451,7 +5724,7 @@ function Library:Toggle()
         Library.Opened = getgenv().Auto_Show ~= false
         Windows.Visible = Library.Opened
         if Library.MainWindow then Library.MainWindow.GroupTransparency = Library.Opened and 0 or 1 end
-        ModalElement.Visible = Library.Opened
+        ModalElement.Visible = Library.Opened or Library._PaletteModalActive == true
         if Library.Blur then Library.Blur.Enabled = Library.Opened end
         return
     end
@@ -5469,7 +5742,7 @@ function Library:Toggle()
     local animationId = windowTweenId
     if windowTween then windowTween:Cancel() end
     Windows.Visible = true
-    ModalElement.Visible = Library.Opened
+    ModalElement.Visible = Library.Opened or Library._PaletteModalActive == true
     if Library.Blur then Library.Blur.Enabled = Library.Opened end
 
     for _, tab in Library.TabAnimations or {} do
@@ -5493,6 +5766,7 @@ end
 -- Insert after Library:AddConnection is defined and before Library:Unload.
 do
     local commands = {}
+    local paletteClipboard
     local palette, search, results, emptyLabel
     local openingCharacter, openingCharacterDeadline, ignoredOpeningPrefix
     local function paletteInput()
@@ -5507,13 +5781,18 @@ do
     local expandedDropdowns = {}
     local favoriteCommands, favoritesLoaded = {}, false
     local function favoritePath()
-        return (Library.SaveFolder or "Library") .. "/CommandFavorites.json"
+        return (Library.SaveFolder or "Library") .. "/Favorites.json"
     end
     local function loadFavorites()
         if favoritesLoaded then return end
         favoritesLoaded = true
         if type(isfile) ~= "function" or type(readfile) ~= "function" then return end
-        local ok, data = pcall(function() if isfile(favoritePath()) then return HttpService:JSONDecode(readfile(favoritePath())) end end)
+        local ok, data = pcall(function()
+            local path = favoritePath()
+            local legacy = (Library.SaveFolder or "Library") .. "/CommandFavorites.json"
+            if isfile(path) then return HttpService:JSONDecode(readfile(path)) end
+            if isfile(legacy) then return HttpService:JSONDecode(readfile(legacy)) end
+        end)
         if ok and type(data) == "table" then favoriteCommands = data end
     end
     local function saveFavorites()
@@ -5613,6 +5892,7 @@ do
                 for key, option in pairs(command.Values) do available[type(key) == "number" and option or key] = true end
                 for option in pairs(selected) do if not available[option] then selected[option] = nil end end
                 if not command.AllowNull and next(selected) == nil and first ~= nil then selected[first] = true end
+                command.DefaultValue = next(selected) or first
                 command.Value = selected
             else
                 local default = info.Default
@@ -5640,7 +5920,7 @@ do
                         end
                     elseif available[value] then nextValue[value] = true end
                     if not self.AllowNull and next(nextValue) == nil then
-                        local fallback = next(self.Value) or first
+                        local fallback = self.DefaultValue or first
                         if fallback and available[fallback] then nextValue[fallback] = true end
                     end
                     self.Value = nextValue
@@ -5894,6 +6174,7 @@ do
 
     function Library:RefreshCommandPalette()
         if not results then return end
+        local previousScroll = results.CanvasPosition
         for _, child in ipairs(results:GetChildren()) do
             if child:IsA("GuiObject") then child:Destroy() end
         end
@@ -5989,7 +6270,8 @@ do
             local visualType = command.FeatureKind or command.Type
             local iconName = command.Icon or featureIcons[visualType] or (command.Kind == "Feature" and "sliders-horizontal" or (command.Builtin and "file-terminal" or "terminal"))
             if not command.Icon and visualType == "Toggle" and type(command.ValueText) == "function" then
-                local ok, value = pcall(command.ValueText)
+                local getter = command.FeatureEntry and command.FeatureEntry.GetValue or command.ValueText
+                local ok, value = pcall(getter)
                 if ok and (value == true or value == "true" or value == "On") then iconName = "toggle-right" end
             end
             Library:ApplyIcon(commandIcon, Library:GetIcon(iconName) or Library:GetIcon("terminal"))
@@ -6058,13 +6340,33 @@ do
                 make("UIPadding", {PaddingLeft = UDim.new(0, 28), Parent = optionSearch})
                 local optionSearchIcon = make("ImageLabel", {BackgroundTransparency = 1, Image = "", ImageColor3 = ThemeColor(140,140,140), Position = UDim2.fromOffset(-21, 7), Size = UDim2.fromOffset(16,16), ZIndex = 105, Parent = optionSearch})
                 Library:ApplyIcon(optionSearchIcon, Library:GetIcon("search"))
+                local hasSelectButtons = control.Multi and control.Selectable
+                if hasSelectButtons then
+                    local bar = make("Frame", {Name = "SelectionButtons", LayoutOrder = 1, Size = UDim2.new(1,-12,0,36), BackgroundTransparency = 1, ZIndex = 104, Parent = optionList})
+                    local function addSelectionButton(label, x, selecting)
+                        local button = make("TextButton", {Name = label, BackgroundColor3 = ThemeColor(35,35,35), Position = UDim2.new(x,0,0,4), Size = UDim2.new(0.5,-3,0,26), Text = label, TextSize = 12, TextColor3 = ThemeColor(220,220,220), FontFace = regularFont, ZIndex = 105, Parent = bar})
+                        corner(button, 5); make("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(60,60,60), Transparency = 0.2, Parent = button})
+                        button.Activated:Connect(function()
+                            if selecting and control.SelectAll then control:SelectAll()
+                            elseif not selecting and control.DeselectAll then control:DeselectAll()
+                            else
+                                local selected = {}
+                                if selecting then for key,value in pairs(control.Values) do selected[type(key) == "number" and value or key] = true end end
+                                control:SetValue(selected)
+                            end
+                            Library:RefreshCommandPalette()
+                        end)
+                    end
+                    addSelectionButton("Select All", 0, true)
+                    addSelectionButton("Deselect All", 0.5, false)
+                end
                 local optionOrder = 0
                 for _, option in ipairs(options) do
                     local name = tostring(option)
                     if filter == "" or name:lower():find(filter, 1, true) then
                         optionOrder += 1
                         local chosen = control.Multi and type(control.Value) == "table" and control.Value[option] == true or (not control.Multi and control.Value == option)
-                        local choice = make("TextButton", {Name = "DropdownChoice", AutoButtonColor = false, LayoutOrder = optionOrder, Size = UDim2.new(1,0,0,30), BackgroundTransparency = 1, Text = name, TextColor3 = chosen and ThemeColor(255,255,255) or ThemeColor(140,140,140), TextSize = 12, FontFace = regularFont, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 104, Parent = optionList})
+                        local choice = make("TextButton", {Name = "DropdownChoice", AutoButtonColor = false, LayoutOrder = optionOrder + (hasSelectButtons and 1 or 0), Size = UDim2.new(1,0,0,30), BackgroundTransparency = 1, Text = name, TextColor3 = chosen and ThemeColor(255,255,255) or ThemeColor(140,140,140), TextSize = 12, FontFace = regularFont, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 104, Parent = optionList})
                         table.insert(choiceRows, {Button = choice, Name = name:lower()})
                         local leftPadding = chosen and 26 or 6
                         make("UIPadding", {PaddingLeft = UDim.new(0, leftPadding), Parent = choice})
@@ -6087,13 +6389,100 @@ do
                     local count = 0
                     for _, row in ipairs(choiceRows) do row.Button.Visible = term == "" or row.Name:find(term, 1, true) ~= nil; if row.Button.Visible then count += 1 end end
                     noOptions.Visible = count == 0
-                    optionList.Size = UDim2.new(1,-4,0,(optionSearch.Visible and 35 or 5) + math.max(1, count) * 30)
+                    optionList.Size = UDim2.new(1,-4,0,(optionSearch.Visible and 35 or 5) + (hasSelectButtons and 36 or 0) + math.max(1, count) * 30)
                 end
                 optionSearch:GetPropertyChangedSignal("Text"):Connect(updateOptionFilter)
                 updateOptionFilter()
             end
+            if command.FeatureKind == "Color" and control and (search.Text:lower() == command.Name:lower() or search.Text:lower() == prefix:lower()) then
+                layoutOrder += 1
+                local editor = make("Frame", {Name="PaletteColorPicker", LayoutOrder=layoutOrder, Size=UDim2.new(1,-4,0,245), BackgroundColor3=ThemeColor(25,25,25), ZIndex=103, Parent=results})
+                corner(editor, 7)
+                make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border, Color=ThemeColor(60,60,60), Parent=editor})
+                local h,s,v = control.Color:ToHSV()
+                local mapSize = paletteBox.AbsoluteSize.X < 340 and 110 or 155
+                local rightX = mapSize + 44
+                local shade = make("ImageButton", {Name="ColorMap", AutoButtonColor=false, BackgroundColor3=Color3.fromHSV(h,1,1), Image="rbxassetid://4155801252", Position=UDim2.fromOffset(10,10), Size=UDim2.fromOffset(mapSize,mapSize), ZIndex=104, Parent=editor})
+                corner(shade, 5)
+                local cursor = make("Frame", {AnchorPoint=Vector2.new(.5,.5), BackgroundColor3=Color3.new(1,1,1), Size=UDim2.fromOffset(9,9), ZIndex=106, Parent=shade})
+                corner(cursor, 5); make("UIStroke", {Color=Color3.new(0,0,0), Parent=cursor})
+                local hue = make("TextButton", {Name="Hue", AutoButtonColor=false, BackgroundColor3=Color3.new(1,1,1), Position=UDim2.fromOffset(mapSize+17,10), Size=UDim2.fromOffset(15,mapSize), Text="", ZIndex=104, Parent=editor})
+                corner(hue, 5); make("UIGradient", {Color=ColorSequence.new(hueSequenceTable), Rotation=90, Parent=hue})
+                local hueCursor = make("Frame", {AnchorPoint=Vector2.new(.5,.5), Position=UDim2.new(.5,0,0,0), Size=UDim2.new(1,2,0,3), BackgroundColor3=Color3.new(1,1,1), ZIndex=106, Parent=hue})
+                local hex = make("TextBox", {Name="Hex", BackgroundColor3=ThemeColor(35,35,35), ClearTextOnFocus=false, Position=UDim2.fromOffset(rightX,10), Size=UDim2.new(1,-rightX-10,0,28), Text="", TextColor3=ThemeColor(220,220,220), TextSize=13, FontFace=regularFont, ZIndex=104, Parent=editor})
+                corner(hex,5); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=ThemeColor(60,60,60),Parent=hex})
+                local function button(label, y, callback)
+                    local b=make("TextButton", {Name=label, AutoButtonColor=false, BackgroundColor3=ThemeColor(35,35,35), Position=UDim2.new(0,rightX,0,y), Size=UDim2.new(1,-rightX-10,0,27), Text=label, TextSize=12, TextColor3=ThemeColor(220,220,220), FontFace=regularFont, ZIndex=104, Parent=editor})
+                    make("UISizeConstraint", {MaxSize=Vector2.new(115,27), Parent=b})
+                    corner(b,5); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=ThemeColor(60,60,60),Parent=b}); b.Activated:Connect(callback); return b
+                end
+                local rainbowButton, rainbowSwitch, rainbowKnob, bar, fill, transparencyValue
+                local function update()
+                    if not editor.Parent then return end
+                    h,s,v = control.Color:ToHSV()
+                    shade.BackgroundColor3=Color3.fromHSV(h,1,1); cursor.Position=UDim2.fromScale(s,1-v); hueCursor.Position=UDim2.fromScale(.5,h)
+                    if not hex:IsFocused() then hex.Text="#"..control.Color:ToHex():upper() end
+                    if rainbowSwitch then
+                        rainbowSwitch.BackgroundColor3=control.Rainbow and ThemeColor(60,200,100) or ThemeColor(35,35,35)
+                        rainbowKnob.BackgroundColor3=control.Rainbow and Color3.new(1,1,1) or ThemeColor(140,140,140)
+                        rainbowKnob.Position=control.Rainbow and UDim2.new(1,-2,.5,0) or UDim2.new(0,2,.5,0)
+                        rainbowKnob.AnchorPoint=control.Rainbow and Vector2.new(1,.5) or Vector2.new(0,.5)
+                    end
+                    if fill then fill.Size=UDim2.fromScale(control.Transparency,1) end
+                    if transparencyValue then transparencyValue.Text=("%d%%"):format(math.floor(control.Transparency*100+.5)) end
+                end
+                local function batch(fn)
+                    if control.Locked then return end
+                    local old=Library._PaletteBatch
+                    Library._PaletteBatch=true
+                    local ok, err=pcall(fn)
+                    Library._PaletteBatch=old
+                    if not ok then warn("[Library] Palette color picker: " .. tostring(err)) end
+                    update()
+                end
+                button("Copy Hex", 45, function() paletteClipboard="#"..control.Color:ToHex():upper(); if type(setclipboard)=="function" then pcall(setclipboard,paletteClipboard) end end)
+                button("Copy RGB", 77, function() local c=control.Color; paletteClipboard=("%d, %d, %d"):format(math.floor(c.R*255+.5),math.floor(c.G*255+.5),math.floor(c.B*255+.5)); if type(setclipboard)=="function" then pcall(setclipboard,paletteClipboard) end end)
+                if control.AllowRainbow then
+                    rainbowButton=make("TextButton", {Name="Rainbow", AutoButtonColor=false, BackgroundTransparency=1, Position=UDim2.fromOffset(rightX,109), Size=UDim2.new(1,-rightX-10,0,27), Text="Rainbow", TextSize=12, TextColor3=ThemeColor(220,220,220), FontFace=regularFont, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd, ZIndex=104, Parent=editor})
+                    rainbowSwitch=make("Frame", {AnchorPoint=Vector2.new(1,.5), Position=UDim2.fromScale(1,.5), Size=UDim2.fromOffset(32,16), BackgroundColor3=ThemeColor(35,35,35), ZIndex=105, Parent=rainbowButton})
+                    corner(rainbowSwitch,8); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border, Color=ThemeColor(60,60,60), Parent=rainbowSwitch})
+                    rainbowKnob=make("Frame", {AnchorPoint=Vector2.new(0,.5), Position=UDim2.new(0,2,.5,0), Size=UDim2.fromOffset(12,12), BackgroundColor3=ThemeColor(140,140,140), ZIndex=106, Parent=rainbowSwitch}); corner(rainbowKnob,6)
+                    rainbowButton.Activated:Connect(function() batch(function() control:SetRainbow(not control.Rainbow) end) end)
+                end
+                local function applyText(text)
+                    local code=tostring(text):match("^%s*#?(%x%x%x%x%x%x)%s*$")
+                    local r,g,b=tostring(text):match("^%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*$")
+                    local color=code and Color3.fromHex(code) or (r and tonumber(r)<=255 and tonumber(g)<=255 and tonumber(b)<=255 and Color3.fromRGB(tonumber(r),tonumber(g),tonumber(b)))
+                    if color then batch(function() control:SetRainbow(false); control:SetColor(color) end) end
+                    update()
+                end
+                button("Paste", 141, function() local value; if type(getclipboard)=="function" then local ok,result=pcall(getclipboard); if ok then value=result end end; applyText(value or paletteClipboard or "") end)
+                hex.FocusLost:Connect(function() applyText(hex.Text) end)
+                if control.AllowTrans then
+                    make("TextLabel", {BackgroundTransparency=1, Position=UDim2.fromOffset(10,183), Size=UDim2.new(1,-20,0,20), Text="Transparency", TextColor3=ThemeColor(200,200,200), TextSize=12, FontFace=regularFont, TextXAlignment=Enum.TextXAlignment.Left,ZIndex=104,Parent=editor})
+                    transparencyValue=make("TextLabel", {Name="TransparencyValue", AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,-10,0,183), Size=UDim2.fromOffset(42,20), BackgroundColor3=ThemeColor(35,35,35), Text="0%", TextColor3=ThemeColor(220,220,220), TextSize=11, FontFace=regularFont, ZIndex=105, Parent=editor})
+                    corner(transparencyValue,5); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=ThemeColor(60,60,60),Parent=transparencyValue})
+                    bar=make("TextButton", {Name="Transparency", AutoButtonColor=false, BackgroundColor3=ThemeColor(60,60,60), Position=UDim2.fromOffset(10,209), Size=UDim2.new(1,-20,0,6), Text="",ZIndex=104,Parent=editor})
+                    corner(bar,4); fill=make("Frame",{BackgroundColor3=ThemeColor(60,200,100),Size=UDim2.fromScale(control.Transparency,1),ZIndex=105,Parent=bar});corner(fill,4)
+                    local knob=make("Frame",{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(1,.5),Size=UDim2.fromOffset(12,12),BackgroundColor3=Color3.new(1,1,1),ZIndex=106,Parent=fill});corner(knob,6)
+                end
+                local dragging
+                local function change(input)
+                    if not dragging or control.Locked then return end
+                    if dragging == shade then s=math.clamp((input.Position.X-shade.AbsolutePosition.X)/math.max(shade.AbsoluteSize.X,1),0,1); v=1-math.clamp((input.Position.Y-shade.AbsolutePosition.Y)/math.max(shade.AbsoluteSize.Y,1),0,1)
+                    elseif dragging == hue then h=math.clamp((input.Position.Y-hue.AbsolutePosition.Y)/math.max(hue.AbsoluteSize.Y,1),0,1)
+                    else batch(function() control:SetTransparency(math.clamp((input.Position.X-bar.AbsolutePosition.X)/math.max(bar.AbsoluteSize.X,1),0,1)) end); fill.Size=UDim2.fromScale(control.Transparency,1); return end
+                    batch(function() control:SetRainbow(false); control:SetColor(Color3.fromHSV(h,s,v)) end)
+                end
+                for _, target in ipairs(bar and {shade,hue,bar} or {shade,hue}) do target.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=target; change(input) end end) end
+                local move=UserInputService.InputChanged:Connect(function(input) if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then change(input) end end)
+                local ended=UserInputService.InputEnded:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=nil end end)
+                local rain=RunService.Heartbeat:Connect(function() if palette and palette.Visible and control.Rainbow then update() end end)
+                editor.Destroying:Connect(function() move:Disconnect(); ended:Disconnect(); rain:Disconnect() end)
+                update()
+            end
         end
-        if resizePalette then task.defer(resizePalette) end
+        if resizePalette then task.defer(function() if results and results.Parent then resizePalette(); results.CanvasPosition = previousScroll end end) end
     end
 
     local function createPalette()
@@ -6190,6 +6579,8 @@ do
         if overlayTween then overlayTween:Cancel() end
         palette:SetAttribute("Closing", false)
         palette.Visible = true
+        Library._PaletteModalActive = true
+        ModalElement.Visible = true
         Library._PaletteSnowActive = true
         if not paletteBlur then paletteBlur = make("BlurEffect", {Name = "FlamesPaletteBlur", Size = 12, Parent = Lighting}) end
         paletteBlur.Enabled = true
@@ -6220,6 +6611,8 @@ do
         if paletteTween then paletteTween:Cancel() end
         if overlayTween then overlayTween:Cancel() end
         palette:SetAttribute("Closing", true)
+        Library._PaletteModalActive = false
+        ModalElement.Visible = Library.Opened == true
         Library._PaletteSnowActive = false
         if paletteBlur then paletteBlur:Destroy(); paletteBlur = nil end
         search:ReleaseFocus(false)
@@ -6370,6 +6763,8 @@ do
     end
 
     function Library:CleanupAdvancedUI()
+        Library._PaletteModalActive = false
+        if ModalElement and ModalElement.Parent then ModalElement.Visible = Library.Opened == true end
         Library._PaletteSnowActive = false
         if paletteBlur then paletteBlur:Destroy(); paletteBlur = nil end
         for handle in pairs(ownedHandles) do handle:Destroy() end
@@ -6378,6 +6773,40 @@ do
     end
 
     Library:AddCommand({ Name = "Toggle UI", Builtin = true, Description = "Show or hide the main window", Callback = function() Library:Toggle() end })
+end
+
+-- A floating label can be placed independently of the window and moved by mouse or touch.
+function Library:AddDraggableLabel(options, icon, iconPosition)
+    if type(options) ~= "table" then options = {Text = options, Icon = icon, IconPosition = iconPosition} end
+    local holder = Create("Frame", {Name = "DraggableLabel", BackgroundColor3 = ThemeColor(25,25,25), Active = true,
+        AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 32), Position = options.Position or UDim2.fromOffset(12,100), Parent = UI})
+    Create("UICorner", {CornerRadius = UDim.new(0,7), Parent = holder})
+    Create("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(80,80,80), Transparency = 0.3, Parent = holder})
+    Create("UIPadding", {PaddingLeft = UDim.new(0,10), PaddingRight = UDim.new(0,10), Parent = holder})
+    Create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0,6), Parent = holder})
+    local image = Create("ImageLabel", {Name = "Icon", BackgroundTransparency = 1, Image = "", Size = UDim2.fromOffset(16,16), ImageColor3 = ThemeColor(200,200,200), Parent = holder})
+    local text = Create("TextLabel", {Name = "Text", BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0,24), FontFace = regularFont, TextSize = 14, TextColor3 = ThemeColor(255,255,255), Text = tostring(options.Text or ""), Parent = holder})
+    local label = {Label = holder, Destroyed = false}
+    function label:SetText(value) if not self.Destroyed then text.Text = tostring(value or "") end end
+    function label:SetIcon(value)
+        if self.Destroyed then return end
+        local definition = value and Library:GetIcon(value)
+        image.Visible = definition ~= nil
+        if definition then Library:ApplyIcon(image, definition) end
+    end
+    function label:SetIconPosition(value)
+        if self.Destroyed then return end
+        local right = type(value) == "string" and value:lower() == "right"
+        image.LayoutOrder, text.LayoutOrder = right and 2 or 1, right and 1 or 2
+    end
+    function label:SetVisible(value) if not self.Destroyed then holder.Visible = value == true end end
+    function label:SetPosition(value) if not self.Destroyed and typeof(value) == "UDim2" then holder.Position = value end end
+    function label:Destroy() if not self.Destroyed then self.Destroyed = true; holder:Destroy() end end
+    label:SetIcon(options.Icon)
+    label:SetIconPosition(options.IconPosition or "left")
+    if options.Visible == false then holder.Visible = false end
+    MakeDraggable(holder, holder)
+    return label
 end
 
 function Library:Unload()
