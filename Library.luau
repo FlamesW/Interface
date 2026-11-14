@@ -24,7 +24,7 @@ local Library = {
     Debug = false, Connections = {}, Flags = {}, Tabs = {},
     LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait(),
 
-    UISize = 245, ToggleKeybind = Enum.KeyCode.RightShift,
+    UISize = 245, ToggleKeybind = Enum.KeyCode.V, ShowLibrarysFeatures = true,
     Opened = nil, SaveFolder = nil, Mobile = UserInputService:GetPlatform() == Enum.Platform.Android or UserInputService:GetPlatform() == Enum.Platform.IOS,
 }
 
@@ -4132,7 +4132,7 @@ local function LoadKeybind()
 end
 
 function Library:CreateWindow(options: WindowOptions)
-    self:SetShowLibrarysFeatures(options.ShowLibrarysFeatures == true)
+    self:SetShowLibrarysFeatures(options.ShowLibrarysFeatures ~= false)
     Library.SnowEnabled = options.Snow ~= false
     SetSnow(Library.SnowEnabled)
     Library.SaveFolder = options.SaveFolder or "Library"
