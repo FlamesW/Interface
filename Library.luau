@@ -3110,14 +3110,16 @@ end
 
     local function EnsureKeybindFrame()
         if Library.KeybindFrame and Library.KeybindFrame.Parent then return Library.KeybindFrame end
-        local frame = Create("CanvasGroup", {Name = "KeybindList", AnchorPoint = Vector2.new(0,0.5), Position = UDim2.new(0,10,0.5,0), Size = UDim2.fromOffset(270,36), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = ThemeColor(25,25,25), ZIndex = 30, Parent = UI})
+        local frame = Create("CanvasGroup", {Name = "KeybindList", AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-10,0.5,0), Size = UDim2.fromOffset(270,36), AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = ThemeColor(25,25,25), GroupTransparency = 1, Visible = false, ZIndex = 30, Parent = UI})
         Create("UICorner", {CornerRadius = UDim.new(0,8), Parent = frame})
         AddAnimatedBorder(frame)
         Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Parent = frame})
-        local header = Create("TextButton", {Name = "Header", LayoutOrder = -1, AutoButtonColor = false, Active = true, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,30), Text = "", ZIndex = 31, Parent = frame})
-        local icon = Create("ImageLabel", {BackgroundTransparency = 1, Image = "", ImageColor3 = ThemeColor(200,200,200), Position = UDim2.fromOffset(9,7), Size = UDim2.fromOffset(16,16), ZIndex = 32, Parent = header})
+        local header = Create("TextButton", {Name = "Header", LayoutOrder = -1, AutoButtonColor = false, Active = true, BackgroundColor3 = ThemeColor(35,35,35), Size = UDim2.new(1,0,0,36), Text = "", ZIndex = 31, Parent = frame})
+        Create("UIGradient", {Color = ColorSequence.new(Color3.new(1,1,1), Color3.fromRGB(215,215,215)), Rotation = 90, Parent = header})
+        local icon = Create("ImageLabel", {BackgroundTransparency = 1, Image = "", ImageColor3 = ThemeColor(220,220,220), AnchorPoint = Vector2.new(0,0.5), Position = UDim2.new(0,12,0.5,0), Size = UDim2.fromOffset(16,16), ZIndex = 32, Parent = header})
         Library:ApplyIcon(icon, Library:GetIcon("keyboard"))
-        Create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(31,0), Size = UDim2.new(1,-60,1,0), Text = "Keybinds", TextColor3 = ThemeColor(220,220,220), TextSize = 15, FontFace = semiBoldFont, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = header})
+        Create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(38,0), Size = UDim2.new(1,-70,1,0), Text = "Keybinds", TextColor3 = ThemeColor(220,220,220), TextSize = 15, FontFace = semiBoldFont, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = header})
+        Create("Frame", {BackgroundColor3 = ThemeColor(80,80,80), BackgroundTransparency = 0.5, BorderSizePixel = 0, Position = UDim2.new(0,1,1,-1), Size = UDim2.new(1,-2,0,1), ZIndex = 32, Parent = header})
         local minimize = Create("ImageButton", {Name = "Minimize", AutoButtonColor = false, BackgroundTransparency = 1, AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-7,0.5,0), Size = UDim2.fromOffset(18,18), Image = "", ImageColor3 = ThemeColor(220,220,220), ZIndex = 32, Parent = header})
         Library:ApplyIcon(minimize, Library:GetIcon("chevron-up"))
         MakeDraggable(header, frame)
@@ -3131,14 +3133,43 @@ end
                 child.ClipsDescendants = true
                 if not Library.KeybindFrameMinimized then child.Visible = child:GetAttribute("Eligible") == true end
                 Tween(child, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Size = UDim2.new(1,0,0,Library.KeybindFrameMinimized and 0 or 28)})
+                for _, part in ipairs(child:GetChildren()) do
+                    if part:IsA("TextLabel") or part:IsA("TextButton") then
+                        local properties = {TextTransparency = Library.KeybindFrameMinimized and 1 or 0}
+                        if part.Name == "ModeBadge" or part.Name == "FrameKeybind" then properties.BackgroundTransparency = Library.KeybindFrameMinimized and 1 or 0 end
+                        Tween(part, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), properties)
+                        local outline = part:FindFirstChildOfClass("UIStroke")
+                        if outline then Tween(outline, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Transparency = Library.KeybindFrameMinimized and 1 or 0.25}) end
+                    end
+                end
                 if Library.KeybindFrameMinimized then task.delay(0.2, function() if generation == minimizeGeneration and child.Parent then child.Visible = false end end) end
             end end
         end)
         Library.KeybindFrame = frame
-        Library.KeybindFrameEnabled = true
-        function Library:SetKeybindFrameVisible(visible) self.KeybindFrameEnabled = visible == true; if self.KeybindFrame then self.KeybindFrame.Visible = self.KeybindFrameEnabled end end
+        if Library.KeybindFrameEnabled == nil then Library.KeybindFrameEnabled = false end
         return frame
     end
+
+    local keybindFrameTween, keybindFrameGeneration = nil, 0
+    function Library:SetKeybindFrameVisible(visible)
+        if self.Unloaded then return end
+        local frame = EnsureKeybindFrame()
+        self.KeybindFrameEnabled = visible == true
+        keybindFrameGeneration += 1
+        local generation = keybindFrameGeneration
+        if keybindFrameTween then keybindFrameTween:Cancel() end
+        if self.KeybindFrameEnabled then frame.Visible = true end
+        keybindFrameTween = TweenService:Create(frame, TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {GroupTransparency = self.KeybindFrameEnabled and 0 or 1})
+        keybindFrameTween.Completed:Connect(function(state)
+            if generation ~= keybindFrameGeneration or state ~= Enum.PlaybackState.Completed then return end
+            keybindFrameTween = nil
+            if frame.Parent and not self.KeybindFrameEnabled then frame.Visible = false end
+        end)
+        keybindFrameTween:Play()
+    end
+    function Library:OpenKeybindFrame() self:SetKeybindFrameVisible(true) end
+    function Library:CloseKeybindFrame() self:SetKeybindFrameVisible(false) end
+    function Library:ToggleKeybindFrame() self:SetKeybindFrameVisible(not self.KeybindFrameEnabled) end
 
     function Components:AddKeyPicker(options: KeyPickerOptions)
         local KeyPickerHolder = Create("Frame", {
@@ -3229,28 +3260,21 @@ end
 
         local frame = EnsureKeybindFrame()
         local listRow = Create("TextButton", {Name = "KeybindEntry", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), Text = "", ClipsDescendants = true, ZIndex = 31, Parent = frame})
-        local rowIcon = Create("ImageLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(8,6), Size = UDim2.fromOffset(16,16), Image = "", ImageColor3 = ThemeColor(200,200,200), ZIndex = 32, Parent = listRow})
-        Library:ApplyIcon(rowIcon, Library:GetIcon("key-square"))
-        local rowTitle = Create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(29,0), Size = UDim2.new(1,-145,1,0), Text = "", TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = ThemeColor(220,220,220), TextSize = 13, FontFace = regularFont, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = listRow})
-        local keyText = Create("TextLabel", {BackgroundTransparency = 1, AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-86,0.5,0), Size = UDim2.fromOffset(40,20), Text = "", TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = ThemeColor(200,200,200), TextSize = 12, FontFace = regularFont, ZIndex = 32, Parent = listRow})
-        local modeBadge = Create("TextLabel", {Name = "ModeBadge", AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-32,0.5,0), Size = UDim2.fromOffset(50,20), Text = "", TextColor3 = ThemeColor(200,200,200), BackgroundColor3 = ThemeColor(35,35,35), TextSize = 11, FontFace = regularFont, ZIndex = 32, Parent = listRow})
-        Create("UICorner", {CornerRadius = UDim.new(0,4), Parent = modeBadge}); Create("UIStroke", {Color = ThemeColor(80,80,80), Transparency = 0.25, Parent = modeBadge})
-        local rowCheck = Create("ImageLabel", {Name = "Check", AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-7,0.5,0), Size = UDim2.fromOffset(18,18), BackgroundColor3 = ThemeColor(35,35,35), Image = "", ZIndex = 32, Parent = listRow})
-        Create("UICorner", {CornerRadius = UDim.new(0,4), Parent = rowCheck})
-        Create("UIStroke", {Color = ThemeColor(60,60,60), Parent = rowCheck})
-        local rowMark = Create("ImageLabel", {BackgroundTransparency = 1, Image = "", ImageColor3 = Color3.new(1,1,1), Size = UDim2.fromScale(1,1), ZIndex = 33, Parent = rowCheck})
-        Library:ApplyIcon(rowMark, Library:GetIcon("check"))
+        local rowTitle = Create("TextLabel", {BackgroundTransparency = 1, Position = UDim2.fromOffset(10,0), Size = UDim2.new(1,-115,1,0), Text = "", TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = ThemeColor(220,220,220), TextSize = 13, FontFace = regularFont, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 32, Parent = listRow})
+        local keyText = Create("TextButton", {Name = "FrameKeybind", AutoButtonColor = false, BackgroundColor3 = ThemeColor(30,30,30), AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-62,0.5,0), Size = UDim2.fromOffset(40,20), Text = "", TextTruncate = Enum.TextTruncate.AtEnd, TextColor3 = ThemeColor(200,200,200), TextSize = 12, FontFace = regularFont, ZIndex = 32, Parent = listRow})
+        Create("UICorner", {CornerRadius = UDim.new(0,4), Parent = keyText}); Create("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(60,60,60), Transparency = 0.3, Parent = keyText})
+        local modeBadge = Create("TextLabel", {Name = "ModeBadge", AnchorPoint = Vector2.new(1,0.5), Position = UDim2.new(1,-8,0.5,0), Size = UDim2.fromOffset(50,20), Text = "", TextColor3 = ThemeColor(200,200,200), BackgroundColor3 = ThemeColor(35,35,35), TextSize = 11, FontFace = regularFont, ZIndex = 32, Parent = listRow})
+        Create("UICorner", {CornerRadius = UDim.new(0,4), Parent = modeBadge}); Create("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(80,80,80), Transparency = 0.25, Parent = modeBadge})
+        Create("Frame", {Name = "Divider", BackgroundColor3 = ThemeColor(80,80,80), BackgroundTransparency = 0.65, BorderSizePixel = 0, Position = UDim2.new(0,1,1,-1), Size = UDim2.new(1,-2,0,1), ZIndex = 32, Parent = listRow})
         local function refreshList()
             local eligible = options.NoUI ~= true and (KeyPicker.Keybind ~= nil or KeyPicker.Mode == "Always")
             listRow:SetAttribute("Eligible", eligible)
             listRow.Visible = eligible and not Library.KeybindFrameMinimized
             rowTitle.Text = options.Name or "Keybind"
-            keyText.Text = "[" .. (KeyPicker.Keybind and KeyPicker.Keybind.Name or "None") .. "]"
+            keyText.Text = KeyPicker.Keybind and (keyCodesName[KeyPicker.Keybind] or KeyPicker.Keybind.Name) or "None"
             modeBadge.Text = KeyPicker.Mode
             local active = options._Toggle and options._Toggle.Value or (not options._Toggle and KeyPicker.State)
             rowTitle.TextColor3 = active and ThemeColor(60,200,100) or ThemeColor(200,200,200)
-            rowCheck.BackgroundColor3 = active and ThemeColor(60,200,100) or ThemeColor(35,35,35)
-            rowMark.Visible = active == true
         end
         KeyPicker.RefreshList = refreshList
         listRow.Activated:Connect(function()
@@ -3258,45 +3282,60 @@ end
             if options._Toggle then if not options._Toggle.Locked then options._Toggle:Set(not options._Toggle.Value) end else KeyPicker:SetState(not KeyPicker.State) end
         end)
         local holdingRow
+        local function releaseHeldRow()
+            if not holdingRow then return end
+            holdingRow = nil
+            if options._Toggle then options._Toggle:Set(false) else KeyPicker:SetState(false) end
+        end
         listRow.InputBegan:Connect(function(input)
             if KeyPicker.Mode ~= "Hold" or KeyPicker.Locked or (input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch) then return end
             holdingRow = input
             if options._Toggle then if not options._Toggle.Locked then options._Toggle:Set(true) end else KeyPicker:SetState(true) end
         end)
         Library:AddConnection(UserInputService.InputEnded:Connect(function(input)
-            if holdingRow and input == holdingRow then holdingRow = nil; if options._Toggle then options._Toggle:Set(false) else KeyPicker:SetState(false) end end
+            if holdingRow and (input == holdingRow or (holdingRow.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1)) then releaseHeldRow() end
         end))
-        local modeMenu = Create("CanvasGroup", {Name = "KeybindModeMenu", BackgroundColor3 = ThemeColor(25,25,25), Size = UDim2.fromOffset(116,87), Visible = false, GroupTransparency = 1, ZIndex = 70, Parent = UI})
+        Library:AddConnection(UserInputService.WindowFocusReleased:Connect(releaseHeldRow))
+        local modeMenu = Create("CanvasGroup", {Name = "KeybindModeMenu", BackgroundColor3 = ThemeColor(25,25,25), Size = UDim2.fromOffset(116,96), Visible = false, GroupTransparency = 1, ZIndex = 70, Parent = UI})
         KeyPicker.ModeMenu = modeMenu
         Create("UICorner", {CornerRadius = UDim.new(0,6), Parent = modeMenu})
-        Create("UIStroke", {Color = ThemeColor(60,60,60), Parent = modeMenu})
-        Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Parent = modeMenu})
+        AddAnimatedBorder(modeMenu)
+        Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0,2), Parent = modeMenu})
+        Create("UIPadding", {PaddingLeft = UDim.new(0,4), PaddingRight = UDim.new(0,4), PaddingTop = UDim.new(0,4), PaddingBottom = UDim.new(0,4), Parent = modeMenu})
         local modeButtons = {}
-        local modeGeneration = 0
+        local modeGeneration, modeIsOpen, modeTween = 0, false, nil
         local function setModeMenuVisible(show)
             modeGeneration += 1
             local generation = modeGeneration
+            modeIsOpen = show
+            if modeTween then modeTween:Cancel() end
             if show then modeMenu.Visible = true end
             local tween = TweenService:Create(modeMenu, TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {GroupTransparency = show and 0 or 1})
+            modeTween = tween
             tween:Play()
-            if not show then tween.Completed:Connect(function(state) if generation == modeGeneration and state == Enum.PlaybackState.Completed then modeMenu.Visible = false end end) end
+            tween.Completed:Connect(function(state)
+                if generation ~= modeGeneration or state ~= Enum.PlaybackState.Completed then return end
+                modeTween = nil
+                if not show and modeMenu.Parent then modeMenu.Visible = false end
+            end)
         end
         function KeyPicker:SetMode(mode)
             if mode ~= "Always" and mode ~= "Hold" and mode ~= "Toggle" then return false end
             if options.FixedMode and mode ~= "Toggle" then return false end
-            if holdingRow then holdingRow = nil; if options._Toggle then options._Toggle:Set(false) else self:SetState(false) end end
+            releaseHeldRow()
             self.Mode = mode
             self.ModeChanging = true
             self:SetState(mode == "Always")
             self.ModeChanging = false
             if mode == "Always" and options._Toggle and not options._Toggle.Locked then options._Toggle:Set(true) end
-            for name, button in pairs(modeButtons) do button.TextColor3 = name == mode and ThemeColor(255,255,255) or ThemeColor(200,200,200); button.BackgroundTransparency = name == mode and 0 or 1 end
+            for name, button in pairs(modeButtons) do button.TextColor3 = name == mode and ThemeColor(255,255,255) or ThemeColor(200,200,200); button.BackgroundTransparency = name == mode and 0 or 1; local stroke = button:FindFirstChildOfClass("UIStroke"); if stroke then stroke.Color = name == mode and ThemeColor(60,200,100) or ThemeColor(60,60,60) end end
             refreshList()
             return true
         end
         for order, mode in ipairs({"Always", "Hold", "Toggle"}) do
-            local button = Create("TextButton", {Name = mode, AutoButtonColor = false, BackgroundColor3 = ThemeColor(25,25,25):Lerp(ThemeColor(60,200,100),0.13), BackgroundTransparency = 1, Size = UDim2.new(1,0,0,29), LayoutOrder = order, Text = mode, TextColor3 = ThemeColor(200,200,200), FontFace = regularFont, TextSize = 12, ZIndex = 71, Parent = modeMenu})
-            if order > 1 then Create("Frame", {BackgroundColor3 = ThemeColor(60,60,60), BackgroundTransparency = 0.4, BorderSizePixel = 0, Size = UDim2.new(1,0,0,1), ZIndex = 72, Parent = button}) end
+            local button = Create("TextButton", {Name = mode, AutoButtonColor = false, BackgroundColor3 = ThemeColor(25,25,25):Lerp(ThemeColor(60,200,100),0.25), BackgroundTransparency = 1, Size = UDim2.new(1,0,0,28), LayoutOrder = order, Text = mode, TextColor3 = ThemeColor(200,200,200), FontFace = regularFont, TextSize = 12, ZIndex = 71, Parent = modeMenu})
+            Create("UICorner", {CornerRadius = UDim.new(0,4), Parent = button})
+            Create("UIStroke", {ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = ThemeColor(60,60,60), Transparency = 0.25, Parent = button})
             modeButtons[mode] = button
             button.Activated:Connect(function() KeyPicker:SetMode(mode); setModeMenuVisible(false) end)
         end
@@ -3305,16 +3344,17 @@ end
             local inset = game:GetService("GuiService"):GetGuiInset()
             local camera = workspace.CurrentCamera
             local view = camera and camera.ViewportSize or Vector2.new(800,600)
-            local right = frame.AbsolutePosition.X + frame.AbsoluteSize.X + 7
-            local x = math.clamp(right + 116 <= view.X and right or frame.AbsolutePosition.X - 123, 0, math.max(0, view.X - 116))
-            local y = math.clamp(anchor.AbsolutePosition.Y - inset.Y - 20, 0, math.max(0, view.Y - inset.Y - 87))
+            local target = anchor == listRow and frame or anchor
+            local right = target.AbsolutePosition.X + target.AbsoluteSize.X + 7
+            local x = math.clamp(right + 116 <= view.X and right or target.AbsolutePosition.X - 123, 0, math.max(0, view.X - 116))
+            local y = math.clamp(anchor.AbsolutePosition.Y - inset.Y + anchor.AbsoluteSize.Y / 2 - 48, 0, math.max(0, view.Y - inset.Y - 96))
             modeMenu.Position = UDim2.fromOffset(x,y)
-            setModeMenuVisible(not modeMenu.Visible)
+            setModeMenuVisible(not modeIsOpen)
         end
         KeyPickerButton.MouseButton2Click:Connect(function() toggleModeMenu(KeyPickerButton) end)
         listRow.MouseButton2Click:Connect(function() toggleModeMenu(listRow) end)
         Library:AddConnection(UserInputService.InputBegan:Connect(function(input)
-            if not modeMenu.Visible or (input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+            if not modeIsOpen or (input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch) then return end
             local p, a, size = input.Position, modeMenu.AbsolutePosition, modeMenu.AbsoluteSize
             if p.X < a.X or p.X > a.X + size.X or p.Y < a.Y or p.Y > a.Y + size.Y then setModeMenuVisible(false) end
         end))
@@ -3356,6 +3396,13 @@ end
             KeyPickerButton.Size = UDim2.fromOffset(width, 24)
             KeyPickerText.Size = UDim2.new(1, -(width + (options.Clearable == false and 6 or 35)), 1, 0)
             KeyPickerButton.Text = keyText
+            local frameKey = listRow:FindFirstChild("FrameKeybind")
+            if frameKey then
+                frameKey.Text = keyText
+                frameKey.Size = UDim2.fromOffset(picking and 48 or 40, 20)
+                frameKey.TextSize = picking and 15 or 12
+                rowTitle.Size = UDim2.new(1, picking and -123 or -115, 1, 0)
+            end
         end
 
         if options.Flag then
@@ -3397,6 +3444,7 @@ end
             KeyPicker.Picking = true
         end
         KeyPickerButton.MouseButton1Click:Connect(PickKey)
+        keyText.Activated:Connect(PickKey)
         editKey.MouseButton1Click:Connect(function()
             if not KeyPicker.Locked and not KeyPicker.Picking then KeyPicker:Clear() end
         end)
@@ -3701,6 +3749,7 @@ end
                 Parent = transBar,
             })
             Create("UICorner", {CornerRadius = UDim.new(1, 0), Parent = transFill})
+            Create("UIGradient", {Color = ColorSequence.new(Color3.new(1,1,1), Color3.fromRGB(205,205,205)), Rotation = 90, Parent = transFill})
             local transKnob = Create("Frame", {Name = "TransparencyKnob", AnchorPoint = Vector2.new(0.5,0.5), Position = UDim2.new(1,0,0.5,0), Size = UDim2.fromOffset(12,12), BackgroundColor3 = Color3.new(1,1,1), Parent = transFill})
             Create("UICorner", {CornerRadius = UDim.new(1,0), Parent = transKnob})
             Create("UIStroke", {Color = ThemeColor(60,200,100), Parent = transKnob})
@@ -3802,6 +3851,10 @@ end
         end
         function ColorPicker:SetRainbow(enabled)
             ColorPicker.Rainbow = ColorPicker.AllowRainbow and enabled == true
+            if ColorPicker.Rainbow then
+                ColorPicker.DraggingColor = false
+                ColorPicker.DraggingHue = false
+            end
             if rainbowButton then
                 local color = ColorPicker.Rainbow and enabledToggleColor or defaultToggleColor
                 rainbowStroke.Color = color
@@ -3903,7 +3956,7 @@ end
         OpenButton.MouseButton1Click:Connect(function() ColorPicker:Toggle() end)
 
         ColorImage.InputBegan:Connect(function(input)
-            if not ColorPicker.Locked and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+            if not ColorPicker.Locked and not ColorPicker.Rainbow and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
                 ColorPicker.DraggingColor = true
                 local minX = ColorImage.AbsolutePosition.X
                 local maxX = minX + ColorImage.AbsoluteSize.X
@@ -3921,7 +3974,7 @@ end
         end)
 
         ColorHue.InputBegan:Connect(function(input)
-            if not ColorPicker.Locked and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+            if not ColorPicker.Locked and not ColorPicker.Rainbow and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
                 ColorPicker.DraggingHue = true
                 local minY = ColorHue.AbsolutePosition.Y
                 local maxY = minY + ColorHue.AbsoluteSize.Y
@@ -3935,6 +3988,11 @@ end
         end)
 
         Library:AddConnection(UserInputService.InputChanged:Connect(function(input)
+            if ColorPicker.Rainbow then
+                ColorPicker.DraggingColor = false
+                ColorPicker.DraggingHue = false
+                return
+            end
             if not Library.Opened and not (activeOption and activeOption.Opened and ColorPickerHolder:IsDescendantOf(activeOption.Container)) then
                 ColorPicker.DraggingColor = false
                 ColorPicker.DraggingHue = false
@@ -6396,24 +6454,30 @@ do
             end
             if command.FeatureKind == "Color" and control and (search.Text:lower() == command.Name:lower() or search.Text:lower() == prefix:lower()) then
                 layoutOrder += 1
-                local editor = make("Frame", {Name="PaletteColorPicker", LayoutOrder=layoutOrder, Size=UDim2.new(1,-4,0,245), BackgroundColor3=ThemeColor(25,25,25), ZIndex=103, Parent=results})
+                local mapHeight = 160
+                local bodyTop = mapHeight + 20
+                local rainbowY = bodyTop + 68
+                local transparencyY = rainbowY + (control.AllowRainbow and 32 or 0)
+                local editorHeight = control.AllowTrans and transparencyY + 47 or rainbowY + (control.AllowRainbow and 32 or 8)
+                local editor = make("Frame", {Name="PaletteColorPicker", LayoutOrder=layoutOrder, Size=UDim2.new(1,-4,0,editorHeight), BackgroundColor3=ThemeColor(25,25,25), ZIndex=103, Parent=results})
                 corner(editor, 7)
                 make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border, Color=ThemeColor(60,60,60), Parent=editor})
                 local h,s,v = control.Color:ToHSV()
-                local mapSize = paletteBox.AbsoluteSize.X < 340 and 110 or 155
-                local rightX = mapSize + 44
-                local shade = make("ImageButton", {Name="ColorMap", AutoButtonColor=false, BackgroundColor3=Color3.fromHSV(h,1,1), Image="rbxassetid://4155801252", Position=UDim2.fromOffset(10,10), Size=UDim2.fromOffset(mapSize,mapSize), ZIndex=104, Parent=editor})
+                local shade = make("ImageButton", {Name="ColorMap", AutoButtonColor=false, BackgroundColor3=Color3.fromHSV(h,1,1), Image="rbxassetid://4155801252", Position=UDim2.fromOffset(10,10), Size=UDim2.new(1,-42,0,mapHeight), ZIndex=104, Parent=editor})
                 corner(shade, 5)
+                make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border, Color=ThemeColor(60,60,60), Thickness=1, Parent=shade})
                 local cursor = make("Frame", {AnchorPoint=Vector2.new(.5,.5), BackgroundColor3=Color3.new(1,1,1), Size=UDim2.fromOffset(9,9), ZIndex=106, Parent=shade})
                 corner(cursor, 5); make("UIStroke", {Color=Color3.new(0,0,0), Parent=cursor})
-                local hue = make("TextButton", {Name="Hue", AutoButtonColor=false, BackgroundColor3=Color3.new(1,1,1), Position=UDim2.fromOffset(mapSize+17,10), Size=UDim2.fromOffset(15,mapSize), Text="", ZIndex=104, Parent=editor})
+                local hue = make("TextButton", {Name="Hue", AutoButtonColor=false, BackgroundColor3=Color3.new(1,1,1), AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,-10,0,10), Size=UDim2.fromOffset(15,mapHeight), Text="", ZIndex=104, Parent=editor})
                 corner(hue, 5); make("UIGradient", {Color=ColorSequence.new(hueSequenceTable), Rotation=90, Parent=hue})
                 local hueCursor = make("Frame", {AnchorPoint=Vector2.new(.5,.5), Position=UDim2.new(.5,0,0,0), Size=UDim2.new(1,2,0,3), BackgroundColor3=Color3.new(1,1,1), ZIndex=106, Parent=hue})
-                local hex = make("TextBox", {Name="Hex", BackgroundColor3=ThemeColor(35,35,35), ClearTextOnFocus=false, Position=UDim2.fromOffset(rightX,10), Size=UDim2.new(1,-rightX-10,0,28), Text="", TextColor3=ThemeColor(220,220,220), TextSize=13, FontFace=regularFont, ZIndex=104, Parent=editor})
+                local hex = make("TextBox", {Name="Hex", BackgroundColor3=ThemeColor(35,35,35), ClearTextOnFocus=false, Position=UDim2.fromOffset(10,bodyTop), Size=UDim2.new(1,-20,0,28), Text="", TextColor3=ThemeColor(220,220,220), TextSize=13, FontFace=regularFont, ZIndex=104, Parent=editor})
                 corner(hex,5); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=ThemeColor(60,60,60),Parent=hex})
                 local function button(label, y, callback)
-                    local b=make("TextButton", {Name=label, AutoButtonColor=false, BackgroundColor3=ThemeColor(35,35,35), Position=UDim2.new(0,rightX,0,y), Size=UDim2.new(1,-rightX-10,0,27), Text=label, TextSize=12, TextColor3=ThemeColor(220,220,220), FontFace=regularFont, ZIndex=104, Parent=editor})
-                    make("UISizeConstraint", {MaxSize=Vector2.new(115,27), Parent=b})
+                    local index = label == "Copy Hex" and 0 or label == "Copy RGB" and 1 or 2
+                    local x = UDim2.new(index / 3, 10 - index * (14/3), 0, bodyTop + 34)
+                    local size = UDim2.new(1/3,-32/3,0,27)
+                    local b=make("TextButton", {Name=label, AutoButtonColor=false, BackgroundColor3=ThemeColor(35,35,35), Position=x, Size=size, Text=label, TextSize=12, TextTruncate=Enum.TextTruncate.AtEnd, TextColor3=ThemeColor(220,220,220), FontFace=regularFont, ZIndex=104, Parent=editor})
                     corner(b,5); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=ThemeColor(60,60,60),Parent=b}); b.Activated:Connect(callback); return b
                 end
                 local rainbowButton, rainbowSwitch, rainbowKnob, bar, fill, transparencyValue
@@ -6443,8 +6507,9 @@ do
                 button("Copy Hex", 45, function() paletteClipboard="#"..control.Color:ToHex():upper(); if type(setclipboard)=="function" then pcall(setclipboard,paletteClipboard) end end)
                 button("Copy RGB", 77, function() local c=control.Color; paletteClipboard=("%d, %d, %d"):format(math.floor(c.R*255+.5),math.floor(c.G*255+.5),math.floor(c.B*255+.5)); if type(setclipboard)=="function" then pcall(setclipboard,paletteClipboard) end end)
                 if control.AllowRainbow then
-                    rainbowButton=make("TextButton", {Name="Rainbow", AutoButtonColor=false, BackgroundTransparency=1, Position=UDim2.fromOffset(rightX,109), Size=UDim2.new(1,-rightX-10,0,27), Text="Rainbow", TextSize=12, TextColor3=ThemeColor(220,220,220), FontFace=regularFont, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd, ZIndex=104, Parent=editor})
+                    rainbowButton=make("TextButton", {Name="Rainbow", AutoButtonColor=false, BackgroundTransparency=1, Position=UDim2.fromOffset(10,rainbowY), Size=UDim2.new(1,-20,0,27), Text="Rainbow", TextSize=12, TextColor3=ThemeColor(220,220,220), FontFace=regularFont, TextXAlignment=Enum.TextXAlignment.Left, TextTruncate=Enum.TextTruncate.AtEnd, ZIndex=104, Parent=editor})
                     rainbowSwitch=make("Frame", {AnchorPoint=Vector2.new(1,.5), Position=UDim2.fromScale(1,.5), Size=UDim2.fromOffset(32,16), BackgroundColor3=ThemeColor(35,35,35), ZIndex=105, Parent=rainbowButton})
+                    make("UIGradient", {Color=ColorSequence.new(Color3.new(1,1,1),Color3.fromRGB(190,190,190)),Rotation=90,Parent=rainbowSwitch})
                     corner(rainbowSwitch,8); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border, Color=ThemeColor(60,60,60), Parent=rainbowSwitch})
                     rainbowKnob=make("Frame", {AnchorPoint=Vector2.new(0,.5), Position=UDim2.new(0,2,.5,0), Size=UDim2.fromOffset(12,12), BackgroundColor3=ThemeColor(140,140,140), ZIndex=106, Parent=rainbowSwitch}); corner(rainbowKnob,6)
                     rainbowButton.Activated:Connect(function() batch(function() control:SetRainbow(not control.Rainbow) end) end)
@@ -6456,25 +6521,27 @@ do
                     if color then batch(function() control:SetRainbow(false); control:SetColor(color) end) end
                     update()
                 end
-                button("Paste", 141, function() local value; if type(getclipboard)=="function" then local ok,result=pcall(getclipboard); if ok then value=result end end; applyText(value or paletteClipboard or "") end)
+                button("Paste", 109, function() local value; if type(getclipboard)=="function" then local ok,result=pcall(getclipboard); if ok then value=result end end; applyText(value or paletteClipboard or "") end)
                 hex.FocusLost:Connect(function() applyText(hex.Text) end)
                 if control.AllowTrans then
-                    make("TextLabel", {BackgroundTransparency=1, Position=UDim2.fromOffset(10,183), Size=UDim2.new(1,-20,0,20), Text="Transparency", TextColor3=ThemeColor(200,200,200), TextSize=12, FontFace=regularFont, TextXAlignment=Enum.TextXAlignment.Left,ZIndex=104,Parent=editor})
-                    transparencyValue=make("TextLabel", {Name="TransparencyValue", AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,-10,0,183), Size=UDim2.fromOffset(42,20), BackgroundColor3=ThemeColor(35,35,35), Text="0%", TextColor3=ThemeColor(220,220,220), TextSize=11, FontFace=regularFont, ZIndex=105, Parent=editor})
+                    make("TextLabel", {BackgroundTransparency=1, Position=UDim2.fromOffset(10,transparencyY), Size=UDim2.new(1,-20,0,20), Text="Transparency", TextColor3=ThemeColor(200,200,200), TextSize=12, FontFace=regularFont, TextXAlignment=Enum.TextXAlignment.Left,ZIndex=104,Parent=editor})
+                    transparencyValue=make("TextLabel", {Name="TransparencyValue", AnchorPoint=Vector2.new(1,0), Position=UDim2.new(1,-10,0,transparencyY), Size=UDim2.fromOffset(42,20), BackgroundColor3=ThemeColor(35,35,35), Text="0%", TextColor3=ThemeColor(220,220,220), TextSize=11, FontFace=regularFont, ZIndex=105, Parent=editor})
                     corner(transparencyValue,5); make("UIStroke", {ApplyStrokeMode=Enum.ApplyStrokeMode.Border,Color=ThemeColor(60,60,60),Parent=transparencyValue})
-                    bar=make("TextButton", {Name="Transparency", AutoButtonColor=false, BackgroundColor3=ThemeColor(60,60,60), Position=UDim2.fromOffset(10,209), Size=UDim2.new(1,-20,0,6), Text="",ZIndex=104,Parent=editor})
+                    bar=make("TextButton", {Name="Transparency", AutoButtonColor=false, BackgroundColor3=ThemeColor(60,60,60), Position=UDim2.fromOffset(10,transparencyY+26), Size=UDim2.new(1,-20,0,6), Text="",ZIndex=104,Parent=editor})
                     corner(bar,4); fill=make("Frame",{BackgroundColor3=ThemeColor(60,200,100),Size=UDim2.fromScale(control.Transparency,1),ZIndex=105,Parent=bar});corner(fill,4)
-                    local knob=make("Frame",{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(1,.5),Size=UDim2.fromOffset(12,12),BackgroundColor3=Color3.new(1,1,1),ZIndex=106,Parent=fill});corner(knob,6)
+                    make("UIGradient", {Color=ColorSequence.new(Color3.new(1,1,1),Color3.fromRGB(205,205,205)),Rotation=90,Parent=fill})
+                    local knob=make("Frame",{AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(1,.5),Size=UDim2.fromOffset(12,12),BackgroundColor3=Color3.new(1,1,1),ZIndex=106,Parent=fill});corner(knob,6); make("UIStroke", {Color=ThemeColor(60,200,100),Parent=knob})
                 end
                 local dragging
                 local function change(input)
                     if not dragging or control.Locked then return end
+                    if control.Rainbow and (dragging == shade or dragging == hue) then dragging = nil; return end
                     if dragging == shade then s=math.clamp((input.Position.X-shade.AbsolutePosition.X)/math.max(shade.AbsoluteSize.X,1),0,1); v=1-math.clamp((input.Position.Y-shade.AbsolutePosition.Y)/math.max(shade.AbsoluteSize.Y,1),0,1)
                     elseif dragging == hue then h=math.clamp((input.Position.Y-hue.AbsolutePosition.Y)/math.max(hue.AbsoluteSize.Y,1),0,1)
                     else batch(function() control:SetTransparency(math.clamp((input.Position.X-bar.AbsolutePosition.X)/math.max(bar.AbsoluteSize.X,1),0,1)) end); fill.Size=UDim2.fromScale(control.Transparency,1); return end
-                    batch(function() control:SetRainbow(false); control:SetColor(Color3.fromHSV(h,s,v)) end)
+                    batch(function() control:SetColor(Color3.fromHSV(h,s,v)) end)
                 end
-                for _, target in ipairs(bar and {shade,hue,bar} or {shade,hue}) do target.InputBegan:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=target; change(input) end end) end
+                for _, target in ipairs(bar and {shade,hue,bar} or {shade,hue}) do target.InputBegan:Connect(function(input) if control.Rainbow and (target == shade or target == hue) then return end; if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=target; change(input) end end) end
                 local move=UserInputService.InputChanged:Connect(function(input) if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then change(input) end end)
                 local ended=UserInputService.InputEnded:Connect(function(input) if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=nil end end)
                 local rain=RunService.Heartbeat:Connect(function() if palette and palette.Visible and control.Rainbow then update() end end)
